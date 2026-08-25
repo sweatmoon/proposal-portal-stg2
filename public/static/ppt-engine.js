@@ -650,6 +650,43 @@ async function applyPlaceholdersToZip(zip, placeholderMap) {
   }
 }
 
+/**
+ * [제목] + [주관기관] 두 플레이스홀더만 치환하는 단순 템플릿 생성 헬퍼
+ * (CLONE_SLIDE / PPTX_XML_TEMPLATE 전략의 단일 슬라이드 메뉴 공용)
+ * @param {object} menu
+ * @param {object} vm
+ * @returns {Promise<{zip: JSZip, mergeStrategy: string} | null>}
+ */
+async function buildTitleClientOrgPptx(menu, vm) {
+  const tpls = Array.isArray(menu.templates) ? menu.templates : [];
+  const tpl  = tpls.find(t => t.pptx_b64_key) || null;
+  if (!tpl) {
+    console.warn(`[PptEngine] ${menu.menu_code} 템플릿 없음 (건너뜀). PPT 관리 메뉴에서 템플릿을 업로드해 주세요.`);
+    return null;
+  }
+  try {
+    const b64   = tpl.pptx_b64_key;
+    const bin   = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const zip = await JSZip.loadAsync(bytes);
+
+    const menuTitle = [menu.menu_number, menu.menu_name].filter(Boolean).join(' ');
+    const clientOrg = (vm && vm.project && vm.project.client) || '';
+
+    await applyPlaceholdersToZip(zip, {
+      '[제목]':     menuTitle,
+      '[주관기관]': clientOrg,
+    });
+
+    console.log(`[PptEngine] ${menu.menu_code} 치환 완료 — 제목:`, menuTitle, '/ 주관기관:', clientOrg);
+    return { zip, mergeStrategy: 'FOREIGN_TEMPLATE' };
+  } catch (e) {
+    console.error(`[PptEngine] ${menu.menu_code} 템플릿 로드 실패:`, e.message);
+    return null;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 4. generateMenuPpt() — 단일 메뉴 PPT 생성 디스패처
 // ═══════════════════════════════════════════════════════════════
@@ -751,35 +788,12 @@ async function generateMenuPpt(menu, vm) {
       result = await downloadSummaryTablePptx(null, { returnZip: true });
       break;
 
-    // ── 3.1 시정조치확인 수행 절차 (플레이스홀더 방식: [제목] + [주관기관]) ──
+    // ── 2.1 단계별 감리 수행 절차 / 3.1 시정조치확인 수행 절차 ──────
+    // (플레이스홀더 방식: [제목] + [주관기관])
+    case 'AUDIT_PROCEDURE':
     case 'ACTION_CONFIRM_PROCEDURE': {
-      const _tpls = Array.isArray(menu.templates) ? menu.templates : [];
-      const _tpl  = _tpls.find(t => t.pptx_b64_key) || null;
-      if (!_tpl) {
-        console.warn('[PptEngine] ACTION_CONFIRM_PROCEDURE 템플릿 없음 (건너뜀). PPT 관리 메뉴에서 템플릿을 업로드해 주세요.');
-        return null;
-      }
-      try {
-        const b64   = _tpl.pptx_b64_key;
-        const bin   = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const zip = await JSZip.loadAsync(bytes);
-
-        const menuTitle = [menu.menu_number, menu.menu_name].filter(Boolean).join(' ');
-        const clientOrg = (vm && vm.project && vm.project.client) || '';
-
-        await applyPlaceholdersToZip(zip, {
-          '[제목]':     menuTitle,
-          '[주관기관]': clientOrg,
-        });
-
-        console.log('[PptEngine] ACTION_CONFIRM_PROCEDURE 치환 완료 — 제목:', menuTitle, '/ 주관기관:', clientOrg);
-        result = { zip, mergeStrategy: 'FOREIGN_TEMPLATE' };
-      } catch (e) {
-        console.error('[PptEngine] ACTION_CONFIRM_PROCEDURE 템플릿 로드 실패:', e.message);
-        return null;
-      }
+      result = await buildTitleClientOrgPptx(menu, vm);
+      if (!result) return null;
       break;
     }
 
