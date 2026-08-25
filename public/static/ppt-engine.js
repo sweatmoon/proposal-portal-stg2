@@ -567,6 +567,90 @@ async function _mergeForeign({ baseZip, srcZip, srcPresXml, srcPresRels, counter
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 3.5. 범용 플레이스홀더 치환 헬퍼
+//    - XML 특수문자 이스케이프 처리 (& < > ")
+//    - 단일 런("[제목]"이 한 <a:r> 안에 그대로) / 분산 런(한글이 여러
+//      <a:r>로 쪼개져 "[", "제", "목", "]" 가 따로 있는 경우) 모두 처리
+//    - buildHistoryPptx()의 replaceInXml() 로직을 범용화한 버전
+// ═══════════════════════════════════════════════════════════════
+
+function escapePptxXml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 슬라이드 XML 문자열 하나에서 placeholder(예: '[제목]') → value 치환
+ * 서식(런 속성 <a:rPr>)은 항상 첫 번째 겹치는 런의 것을 그대로 유지한다.
+ */
+function replacePlaceholderInXml(xml, placeholder, rawValue) {
+  const value = escapePptxXml(rawValue);
+
+  // Case 1: 플레이스홀더 전체가 단일 <a:t> 안에 그대로 있는 경우
+  if (xml.includes(placeholder)) {
+    return xml.split(placeholder).join(value);
+  }
+
+  // Case 2: 분산 런 — 대괄호 문자조차 없으면 이 슬라이드엔 해당 플레이스홀더가 없음
+  const firstChar = placeholder.charAt(0);
+  if (!xml.includes(firstChar)) return xml;
+
+  const paraReg = /(<a:p\b[^>]*>)([\s\S]*?)(<\/a:p>)/g;
+  let changed = false;
+  const result = xml.replace(paraReg, (full, open, inner, close) => {
+    const runs = [];
+    inner.replace(/<a:r\b[\s\S]*?<\/a:r>/g, run => {
+      const t = run.match(/<a:t[^>]*>([^<]*)<\/a:t>/);
+      runs.push({ run, text: t ? t[1] : '' });
+    });
+    const concat = runs.map(r => r.text).join('');
+    if (!concat.includes(placeholder)) return full;
+
+    const pStart = concat.indexOf(placeholder);
+    const pEnd = pStart + placeholder.length;
+    let pos = 0, firstDone = false;
+    const newInner = inner.replace(/<a:r\b[\s\S]*?<\/a:r>/g, run => {
+      const t = run.match(/<a:t[^>]*>([^<]*)<\/a:t>/);
+      const txt = t ? t[1] : '';
+      const rStart = pos, rEnd = pos + txt.length;
+      pos = rEnd;
+      if (txt === '') return run;
+      const overlap = rEnd > pStart && rStart < pEnd;
+      if (!overlap) return run;
+      if (!firstDone) {
+        firstDone = true;
+        // 첫 겹침 런의 <a:rPr>(서식)은 그대로 두고 텍스트만 교체
+        return run.replace(/<a:t([^>]*)>[^<]*<\/a:t>/, `<a:t$1>${value}</a:t>`);
+      }
+      // 나머지 겹침 런은 텍스트만 비워 제거 (서식 태그는 건드리지 않음 → 레이아웃 유지)
+      return run.replace(/<a:t([^>]*)>[^<]*<\/a:t>/, `<a:t$1></a:t>`);
+    });
+    changed = true;
+    return open + newInner + close;
+  });
+  return changed ? result : xml;
+}
+
+/**
+ * zip 안의 모든 슬라이드에 걸쳐 여러 플레이스홀더를 한 번에 치환
+ * @param {JSZip} zip
+ * @param {Record<string,string>} placeholderMap  예: { '[제목]': '3.1 시정조치확인 수행 절차', '[주관기관]': '한국공항공사' }
+ */
+async function applyPlaceholdersToZip(zip, placeholderMap) {
+  const slideFiles = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f));
+  for (const slideFile of slideFiles) {
+    let xml = await zip.file(slideFile).async('string');
+    for (const [placeholder, value] of Object.entries(placeholderMap)) {
+      xml = replacePlaceholderInXml(xml, placeholder, value);
+    }
+    zip.file(slideFile, xml);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 4. generateMenuPpt() — 단일 메뉴 PPT 생성 디스패처
 // ═══════════════════════════════════════════════════════════════
 
@@ -666,6 +750,38 @@ async function generateMenuPpt(menu, vm) {
     case 'COMPLIANCE':
       result = await downloadSummaryTablePptx(null, { returnZip: true });
       break;
+
+    // ── 3.1 시정조치확인 수행 절차 (플레이스홀더 방식: [제목] + [주관기관]) ──
+    case 'ACTION_CONFIRM_PROCEDURE': {
+      const _tpls = Array.isArray(menu.templates) ? menu.templates : [];
+      const _tpl  = _tpls.find(t => t.pptx_b64_key) || null;
+      if (!_tpl) {
+        console.warn('[PptEngine] ACTION_CONFIRM_PROCEDURE 템플릿 없음 (건너뜀). PPT 관리 메뉴에서 템플릿을 업로드해 주세요.');
+        return null;
+      }
+      try {
+        const b64   = _tpl.pptx_b64_key;
+        const bin   = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const zip = await JSZip.loadAsync(bytes);
+
+        const menuTitle = [menu.menu_number, menu.menu_name].filter(Boolean).join(' ');
+        const clientOrg = (vm && vm.project && vm.project.client) || '';
+
+        await applyPlaceholdersToZip(zip, {
+          '[제목]':     menuTitle,
+          '[주관기관]': clientOrg,
+        });
+
+        console.log('[PptEngine] ACTION_CONFIRM_PROCEDURE 치환 완료 — 제목:', menuTitle, '/ 주관기관:', clientOrg);
+        result = { zip, mergeStrategy: 'FOREIGN_TEMPLATE' };
+      } catch (e) {
+        console.error('[PptEngine] ACTION_CONFIRM_PROCEDURE 템플릿 로드 실패:', e.message);
+        return null;
+      }
+      break;
+    }
 
     default: {
       // ── 템플릿 파일 직접 합본 (데이터 연동 미구현 메뉴) ──────────
