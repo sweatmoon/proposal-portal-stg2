@@ -40,7 +40,9 @@ function buildProjectViewModel(pd) {
     return { name, field, grade: info.grade || '', group, residency: info.residency || '', certNo: info.certNo || '' };
   });
 
-  const auditMembers   = allMembers.filter(m => !m.group || m.group === '감리원');
+  // 주의: pages.ts의 personGradeMap.group은 '감리원팀'으로 저장됨('감리원'이 아님).
+  // 과거엔 '감리원'만 인정해서 감리원이 전부 걸러지는 버그가 있었음 — 둘 다 인정하도록 수정.
+  const auditMembers   = allMembers.filter(m => !m.group || m.group === '감리원' || m.group === '감리원팀');
   const coreExperts    = allMembers.filter(m => m.group === '핵심기술');
   const requiredExperts = allMembers.filter(m => m.group === '필수기술');
   const securityExperts = allMembers.filter(m => m.group === '보안');
