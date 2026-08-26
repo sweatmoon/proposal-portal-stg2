@@ -620,13 +620,17 @@ function replacePlaceholderInXml(xml, placeholder, rawValue) {
       if (txt === '') return run;
       const overlap = rEnd > pStart && rStart < pEnd;
       if (!overlap) return run;
-      if (!firstDone) {
-        firstDone = true;
-        // 첫 겹침 런의 <a:rPr>(서식)은 그대로 두고 텍스트만 교체
-        return run.replace(/<a:t([^>]*)>[^<]*<\/a:t>/, `<a:t$1>${value}</a:t>`);
-      }
-      // 나머지 겹침 런은 텍스트만 비워 제거 (서식 태그는 건드리지 않음 → 레이아웃 유지)
-      return run.replace(/<a:t([^>]*)>[^<]*<\/a:t>/, `<a:t$1></a:t>`);
+
+      // 이 런 안에서 플레이스홀더가 차지하는 구간을 제외한 앞/뒤 텍스트는 보존
+      // (예: "1MD] MD" 런에서 "] MD" 뒤 고정 문구가 사라지지 않도록)
+      const localStart = Math.max(0, pStart - rStart);
+      const localEnd   = Math.min(txt.length, pEnd - rStart);
+      const prefix = txt.slice(0, localStart);
+      const suffix = txt.slice(localEnd);
+      const mid = firstDone ? '' : value; // 치환값은 첫 겹침 런에만 1회 삽입
+      firstDone = true;
+      const newTxt = prefix + mid + suffix;
+      return run.replace(/<a:t([^>]*)>[^<]*<\/a:t>/, (m, attrs) => `<a:t${attrs}>${newTxt}</a:t>`);
     });
     changed = true;
     return open + newInner + close;
@@ -685,6 +689,203 @@ async function buildTitleClientOrgPptx(menu, vm) {
     console.error(`[PptEngine] ${menu.menu_code} 템플릿 로드 실패:`, e.message);
     return null;
   }
+}
+
+/**
+ * 분야 문자열을 base(괄호 앞)와 variant(괄호 안)로 분리
+ * "응용시스템(교육)" → { base: '응용시스템', variant: '교육' }
+ * "사업관리 및 품질보증" → { base: '사업관리 및 품질보증', variant: null }
+ */
+function splitDomainBase(domain) {
+  const s = String(domain || '').trim();
+  const m = s.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  if (m) return { base: m[1].trim(), variant: m[2].trim() };
+  return { base: s, variant: null };
+}
+
+/**
+ * ⚠️ ACTION_CONFIRM_STAFF 템플릿(3.2 시정조치확인 수행 인력)은 표 구조상
+ * "그룹별 이름 슬롯 개수"가 rowSpan 병합으로 고정되어 있음:
+ *   분야1(1칸) → 분야2(최대 5칸, 하위분화 시 -1~-5) → 분야3(1칸) → 분야4(1칸)
+ * 실제 분야 데이터가 몇 개든 등장 순서대로 이 고정 슬롯에 매핑한다.
+ * 템플릿이 바뀌어 슬롯 개수가 달라지면 이 배열도 같이 수정해야 한다.
+ */
+const ACTION_CONFIRM_STAFF_SLOT_CAPACITY = [1, 5, 1, 1]; // [그룹1, 그룹2, 그룹3, 그룹4]의 이름 슬롯 수
+
+/**
+ * 감리원(vm.auditMembers) 목록으로부터 [분야n] / [분야n-m] / [이름n] 슬롯을 구성
+ * - 등장 순서를 유지하며 고유 분야를 추출, 괄호 앞부분(base)이 같으면 한 그룹으로 묶음
+ * - base가 2개 이상의 변형(variant)을 가지면 [분야n-1], [분야n-2]...로 세분화하고
+ *   [분야n]은 base(그룹명)만 표시. base가 1개뿐이면 세분화 없이 [분야n] 하나로 처리
+ * - [이름n] 번호는 "실제 사용 개수"가 아니라 slotCapacity가 정해둔 그룹별 고정 자리에서 배정
+ *   (그룹2가 실제로 2개만 쓰더라도 5칸을 예약하고 있으므로 그룹3은 항상 7번부터 시작)
+ * - 한 분야에 감리원이 여러 명이면 이름을 ', '로 이어붙임
+ *
+ * @param {Array<{name:string, field:string}>} auditMembers
+ * @param {number[]} slotCapacity  그룹별 이름 슬롯 예약 개수
+ * @returns {Array<{fieldPlaceholder:string, fieldValue:string, namePlaceholder:string|null, names:string[]}>}
+ */
+function buildDomainSlots(auditMembers, slotCapacity) {
+  const domainOrder = [];
+  const domainNames = new Map(); // domain(원문) → [이름들]
+  (auditMembers || []).forEach(m => {
+    const domain = String(m.field || '').trim();
+    if (!domain) return;
+    if (!domainNames.has(domain)) { domainNames.set(domain, []); domainOrder.push(domain); }
+    domainNames.get(domain).push(m.name);
+  });
+
+  const groupOrder = []; // base 문자열 등장 순서
+  const groupMap = new Map(); // base → [{full, variant}]
+  domainOrder.forEach(domain => {
+    const { base, variant } = splitDomainBase(domain);
+    if (!groupMap.has(base)) { groupMap.set(base, []); groupOrder.push(base); }
+    groupMap.get(base).push({ full: domain, variant });
+  });
+
+  const slots = [];
+  let nameSlotCursor = 1; // 다음 그룹이 시작할 이름 슬롯 번호
+  groupOrder.forEach((base, gi) => {
+    const groupNo = gi + 1;
+    const capacity = slotCapacity[gi] ?? 1;
+    const variants = groupMap.get(base);
+    const baseOffset = nameSlotCursor;
+
+    if (gi >= slotCapacity.length) {
+      console.warn(`[PptEngine] ACTION_CONFIRM_STAFF: 템플릿 슬롯(${slotCapacity.length}개)보다 분야가 많습니다 — "${base}" 이후 분야는 템플릿에 자리가 없어 표시되지 않을 수 있습니다.`);
+    }
+
+    if (variants.length === 1) {
+      slots.push({
+        fieldPlaceholder: `[분야${groupNo}]`,
+        fieldValue: variants[0].full,
+        namePlaceholder: `[이름${baseOffset}]`,
+        names: domainNames.get(variants[0].full) || [],
+      });
+    } else {
+      // 상위 그룹 헤더: 괄호 뺀 base만 표시, 이름 슬롯 없음
+      slots.push({
+        fieldPlaceholder: `[분야${groupNo}]`,
+        fieldValue: base,
+        namePlaceholder: null,
+        names: [],
+      });
+      if (variants.length > capacity) {
+        console.warn(`[PptEngine] ACTION_CONFIRM_STAFF: "${base}" 그룹에 하위 분야가 ${variants.length}개인데 템플릿 슬롯은 ${capacity}개뿐입니다 — 초과분(${variants.length - capacity}개)은 표시되지 않습니다.`);
+      }
+      variants.forEach((v, vi) => {
+        if (vi >= capacity) return; // 템플릿에 더 이상 자리 없음
+        slots.push({
+          fieldPlaceholder: `[분야${groupNo}-${vi + 1}]`,
+          fieldValue: v.full,
+          namePlaceholder: `[이름${baseOffset + vi}]`,
+          names: domainNames.get(v.full) || [],
+        });
+      });
+    }
+    nameSlotCursor += capacity;
+  });
+  return slots;
+}
+
+/**
+ * vm.stages 중 "시정조치확인 결과가 있는 단계"(감리원 action_confirm_md 합 ≥ 1)만 골라
+ * [단계n] / [단계nMD] 플레이스홀더 맵 생성. MD는 감리원 몫만 합산 (전문가 제외).
+ * @param {Array} stages
+ * @returns {Record<string,string>}
+ */
+function buildStagePlaceholderMap(stages) {
+  const qualifying = (stages || []).filter(s => s.감리원 && Number(s.감리원.post) >= 1);
+  const map = {};
+  qualifying.forEach((s, i) => {
+    const n = i + 1;
+    map[`[단계${n}]`] = s.stage || '';
+    map[`[단계${n}MD]`] = String(s.감리원.post);
+  });
+  return map;
+}
+
+/**
+ * 표(<a:tbl>) 안에서, 치환 후에도 "[분야...]" / "[이름...]" 플레이스홀더만 남아있는
+ * (=실제 데이터가 없어 채워지지 않은) 행을 통째로 삭제한다.
+ * rowSpan으로 그 행을 관통하던 다른 열의 병합 셀은 rowSpan 값을 삭제한 행 수만큼 자동으로
+ * 줄여 표 구조가 깨지지 않도록 한다 (병합 범위 밖 행은 건드리지 않음).
+ *
+ * 안전장치: "[분야...]"/"[이름...]" 계열 플레이스홀더로만 이뤄진 행만 대상으로 하므로
+ * 실제 라벨/설명 텍스트가 있는 행(감리 단계, 투입 공수 등)은 절대 삭제되지 않는다.
+ *
+ * @param {string} xml  슬라이드 XML 문자열 (치환 완료된 상태)
+ * @returns {string}
+ */
+function removeUnfilledDomainRows(xml) {
+  const tblMatch = xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/);
+  if (!tblMatch) return xml;
+  const tbl = tblMatch[0];
+
+  const trList = tbl.match(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g) || [];
+  if (!trList.length) return xml;
+
+  const unfilledTest = (text) => {
+    const stripped = text.replace(/\[(?:분야|이름)[0-9]*(?:-[0-9]+)?\]/g, '').trim();
+    return stripped === '' && /\[(?:분야|이름)/.test(text);
+  };
+
+  const rowsInfo = trList.map((trStr, rowIdx) => {
+    const tcOpens = [...trStr.matchAll(/<a:tc([^>]*)>/g)];
+    const texts = [...trStr.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]);
+    return { trStr, rowIdx, tcOpens, concatText: texts.join('') };
+  });
+
+  const toDelete = new Set();
+  rowsInfo.forEach(r => {
+    if (r.concatText.trim() !== '' && unfilledTest(r.concatText)) toDelete.add(r.rowIdx);
+  });
+  if (toDelete.size === 0) return xml;
+
+  // 컬럼(ordinal position)별 rowSpan 원본 추적 → 삭제되는 행이 그 범위 안에 있으면 감소량 누적
+  const spanDecrements = new Map(); // `${originRowIdx}:${colIdx}` → 감소량
+  const colOrigin = {};
+  rowsInfo.forEach(r => {
+    r.tcOpens.forEach((m, colIdx) => {
+      const attrs = m[1];
+      const rowSpanMatch = attrs.match(/rowSpan="(\d+)"/);
+      const isVMergeCont = /vMerge="1"/.test(attrs);
+      if (rowSpanMatch && !isVMergeCont) {
+        colOrigin[colIdx] = { originRowIdx: r.rowIdx, span: parseInt(rowSpanMatch[1], 10) };
+      }
+      if (toDelete.has(r.rowIdx)) {
+        const origin = colOrigin[colIdx];
+        if (origin && origin.originRowIdx !== r.rowIdx &&
+            r.rowIdx >= origin.originRowIdx && r.rowIdx < origin.originRowIdx + origin.span) {
+          const key = `${origin.originRowIdx}:${colIdx}`;
+          spanDecrements.set(key, (spanDecrements.get(key) || 0) + 1);
+        }
+      }
+    });
+  });
+
+  // 원본 rowSpan 값 감소 적용
+  spanDecrements.forEach((dec, key) => {
+    const [originRowIdxStr, colIdxStr] = key.split(':');
+    const originRowIdx = parseInt(originRowIdxStr, 10);
+    const colIdx = parseInt(colIdxStr, 10);
+    const row = rowsInfo[originRowIdx];
+    let cellCount = -1;
+    row.trStr = row.trStr.replace(/<a:tc([^>]*)>/g, (m, attrs) => {
+      cellCount++;
+      if (cellCount !== colIdx) return m;
+      const rowSpanMatch = attrs.match(/rowSpan="(\d+)"/);
+      if (!rowSpanMatch) return m;
+      const newSpan = parseInt(rowSpanMatch[1], 10) - dec;
+      if (newSpan <= 1) return `<a:tc${attrs.replace(/\s*rowSpan="\d+"/, '')}>`;
+      return `<a:tc${attrs.replace(/rowSpan="\d+"/, `rowSpan="${newSpan}"`)}>`;
+    });
+  });
+
+  const newTrList = rowsInfo.filter(r => !toDelete.has(r.rowIdx)).map(r => r.trStr);
+  let i = 0;
+  const newTbl = tbl.replace(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g, () => newTrList[i++]);
+  return xml.replace(tbl, newTbl);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -794,6 +995,59 @@ async function generateMenuPpt(menu, vm) {
     case 'ACTION_CONFIRM_PROCEDURE': {
       result = await buildTitleClientOrgPptx(menu, vm);
       if (!result) return null;
+      break;
+    }
+
+    // ── 3.2 시정조치확인 수행 인력 (분야/이름 동적 슬롯 + 단계별 MD) ──
+    case 'ACTION_CONFIRM_STAFF': {
+      const _tpls = Array.isArray(menu.templates) ? menu.templates : [];
+      const _tpl  = _tpls.find(t => t.pptx_b64_key) || null;
+      if (!_tpl) {
+        console.warn('[PptEngine] ACTION_CONFIRM_STAFF 템플릿 없음 (건너뜀). PPT 관리 메뉴에서 템플릿을 업로드해 주세요.');
+        return null;
+      }
+      try {
+        const b64   = _tpl.pptx_b64_key;
+        const bin   = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const zip = await JSZip.loadAsync(bytes);
+
+        const menuTitle  = [menu.menu_number, menu.menu_name].filter(Boolean).join(' ');
+        const clientOrg  = (vm && vm.project && vm.project.client) || '';
+        const domainSlots = buildDomainSlots(vm.auditMembers || [], ACTION_CONFIRM_STAFF_SLOT_CAPACITY);
+        const stageMap    = buildStagePlaceholderMap(vm.stages || []);
+
+        const placeholderMap = {
+          '[제목]':     menuTitle,
+          '[주관기관]': clientOrg,
+          ...stageMap,
+        };
+        domainSlots.forEach(slot => {
+          placeholderMap[slot.fieldPlaceholder] = slot.fieldValue;
+          if (slot.namePlaceholder) placeholderMap[slot.namePlaceholder] = slot.names.join(', ');
+        });
+
+        await applyPlaceholdersToZip(zip, placeholderMap);
+
+        // 치환 후에도 [분야...]/[이름...]만 남은(=템플릿보다 실제 분야 수가 적은) 행은
+        // rowSpan 병합을 안전하게 재조정하면서 통째로 삭제
+        const slideFilesAcs = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f));
+        for (const slideFile of slideFilesAcs) {
+          const xmlBefore = await zip.file(slideFile).async('string');
+          const xmlAfter  = removeUnfilledDomainRows(xmlBefore);
+          if (xmlAfter !== xmlBefore) zip.file(slideFile, xmlAfter);
+        }
+
+        console.log('[PptEngine] ACTION_CONFIRM_STAFF 치환 완료:', {
+          단계: stageMap,
+          분야: domainSlots.map(s => `${s.fieldPlaceholder}=${s.fieldValue}` + (s.namePlaceholder ? ` / ${s.namePlaceholder}=${s.names.join(',')}` : '')),
+        });
+        result = { zip, mergeStrategy: 'FOREIGN_TEMPLATE' };
+      } catch (e) {
+        console.error('[PptEngine] ACTION_CONFIRM_STAFF 템플릿 로드 실패:', e.message);
+        return null;
+      }
       break;
     }
 
