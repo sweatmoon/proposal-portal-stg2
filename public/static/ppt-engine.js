@@ -756,10 +756,13 @@ function buildDomainSlots(auditMembers, maxRows) {
         return;
       }
       slots.push({
+        rowN,
         groupPlaceholder: `[그룹${rowN}]`,
         groupValue: base,
         subPlaceholder: `[세부${rowN}]`,
-        subValue: variants.length > 1 ? v.full : '', // 세분화 없으면 세부 칸은 비움
+        // 세분화가 있으면 괄호 안 내용만("응용시스템(AI · LLM/RAG)" → "AI · LLM/RAG"),
+        // 세분화가 없으면 빈 문자열(해당 행은 그룹/세부 칸을 가로로 병합해서 표시)
+        subValue: variants.length > 1 ? (v.variant || v.full) : '',
         namePlaceholder: `[이름${rowN}]`,
         names: domainNames.get(v.full) || [],
       });
@@ -784,6 +787,45 @@ function buildStagePlaceholderMap(stages) {
     map[`[단계${n}MD]`] = String(s.감리원.post);
   });
   return map;
+}
+
+/**
+ * 세분화가 없는(=[세부n]이 빈 문자열로 치환된) 인력 행은 [그룹n]/[세부n] 두 칸이
+ * 좁은 컬럼에 따로 나뉘어 보이면 어색하므로, 물리적 행 인덱스를 정확히 알고 있는 상태에서
+ * (치환·행삭제 이전 단계) 그 두 칸을 gridSpan으로 가로 병합한다.
+ * 표 구조: row0=헤더, row1~row{maxRows}=인력 행(물리 인덱스 == rowN), 그 뒤 투입공수 행...
+ * @param {string} xml  슬라이드 XML (치환 이전, 플레이스홀더가 아직 살아있는 상태)
+ * @param {number[]} rowNs  가로 병합할 인력 행 번호(rowN) 목록
+ * @returns {string}
+ */
+function mergeSingletonDomainRows(xml, rowNs) {
+  if (!rowNs || rowNs.length === 0) return xml;
+  const tblMatch = xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/);
+  if (!tblMatch) return xml;
+  let tbl = tblMatch[0];
+
+  const trList = tbl.match(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g) || [];
+  const rowNSet = new Set(rowNs);
+  const newTrList = trList.map((trStr, physIdx) => {
+    if (!rowNSet.has(physIdx)) return trStr; // 인력 행은 물리 인덱스 == rowN (row0이 헤더이므로)
+    const tcMatches = [...trStr.matchAll(/<a:tc\b([^>]*)>([\s\S]*?)<\/a:tc>/g)];
+    if (tcMatches.length < 3) return trStr;
+    // 컬럼 인덱스 1(그룹)과 2(세부)를 gridSpan으로 병합
+    const [groupFull, groupAttrs, groupInner] = tcMatches[1];
+    const [subFull] = tcMatches[2];
+    const gridSpanMatch = groupAttrs.match(/gridSpan="(\d+)"/);
+    const prevSpan = gridSpanMatch ? parseInt(gridSpanMatch[1], 10) : 1;
+    const newSpan = prevSpan + 1;
+    const newGroupAttrs = gridSpanMatch
+      ? groupAttrs.replace(/gridSpan="\d+"/, `gridSpan="${newSpan}"`)
+      : `${groupAttrs} gridSpan="${newSpan}"`;
+    const newGroupTc = `<a:tc${newGroupAttrs}>${groupInner}</a:tc>`;
+    const newSubTc = `<a:tc hMerge="1"><a:tcPr/></a:tc>`;
+    return trStr.replace(groupFull, newGroupTc).replace(subFull, newSubTc);
+  });
+  let i = 0;
+  tbl = tbl.replace(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g, () => newTrList[i++]);
+  return xml.replace(tblMatch[0], tbl);
 }
 
 /**
@@ -1073,12 +1115,15 @@ async function generateMenuPpt(menu, vm) {
 
         await applyPlaceholdersToZip(zip, placeholderMap);
 
+        // 세분화 없는(=세부 칸이 빈) 인력 행은 그룹/세부 두 칸을 가로 병합
+        const singletonRowNs = domainSlots.filter(s => !s.subValue).map(s => s.rowN);
         // 치환 후에도 [그룹...]/[세부...]/[이름...]만 남은(=템플릿보다 실제 인력이 적은) 행은
         // rowSpan 병합을 안전하게 재조정하면서 통째로 삭제
         const slideFilesAcs = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f));
         for (const slideFile of slideFilesAcs) {
           let x = await zip.file(slideFile).async('string');
           const before = x;
+          x = mergeSingletonDomainRows(x, singletonRowNs);
           x = removeUnfilledDomainRows(x);
           // 시정조치확인 결과가 있는 단계가 템플릿 최대치(3개)보다 적으면, 안 쓰는 단계 컬럼을 삭제
           // ⚠️ 이 템플릿은 [단계n] 컬럼이 인덱스 2+n에 고정되어 있음 — 템플릿이 바뀌면 같이 수정 필요
