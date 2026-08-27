@@ -890,6 +890,122 @@ function removeUnfilledDomainRows(xml) {
   return xml.replace(tbl, newTbl);
 }
 
+/**
+ * 분야 그룹이 세분화 없이 단일 분야로 collapse된 경우(예: "응용시스템" 하위분야가 실제로는
+ * 1개뿐인 사업) — "[분야n]"은 값이 채워졌는데 바로 옆 "[분야n-m]" 칸만 미채움으로 남는 상황을
+ * 감지해서 두 셀을 가로(gridSpan)로 병합한다. (템플릿에서 분야1/분야3/분야4 행이 원래
+ * 쓰고 있는 "그룹명 하나로 합쳐서 표시" 방식과 동일하게 맞춰주는 것)
+ * @param {string} xml
+ * @returns {string}
+ */
+function mergeCollapsedDomainSubColumn(xml) {
+  const tblMatch = xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/);
+  if (!tblMatch) return xml;
+  let tbl = tblMatch[0];
+
+  const trList = tbl.match(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g) || [];
+  let changed = false;
+  const newTrList = trList.map(trStr => {
+    const tcMatches = [...trStr.matchAll(/<a:tc\b([^>]*)>([\s\S]*?)<\/a:tc>/g)];
+    if (tcMatches.length < 2) return trStr;
+
+    for (let i = 1; i < tcMatches.length; i++) {
+      const prevFull = tcMatches[i - 1][0];
+      const prevAttrs = tcMatches[i - 1][1];
+      const prevInner = tcMatches[i - 1][2];
+      const prevText = [...prevInner.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]).join('').trim();
+
+      const curFull = tcMatches[i][0];
+      const curInner = tcMatches[i][2];
+      const curText = [...curInner.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]).join('').trim();
+
+      const prevIsFilledGroupHeader = prevText !== '' && !/\[분야/.test(prevText);
+      const curIsUnfilledSub = /^\[분야[0-9]+-[0-9]+\]$/.test(curText);
+
+      if (prevIsFilledGroupHeader && curIsUnfilledSub) {
+        const gridSpanMatch = prevAttrs.match(/gridSpan="(\d+)"/);
+        const prevSpan = gridSpanMatch ? parseInt(gridSpanMatch[1], 10) : 1;
+        const newSpan = prevSpan + 1;
+        const newPrevAttrs = gridSpanMatch
+          ? prevAttrs.replace(/gridSpan="\d+"/, `gridSpan="${newSpan}"`)
+          : `${prevAttrs} gridSpan="${newSpan}"`;
+        const newPrevTc = `<a:tc${newPrevAttrs}>${prevInner}</a:tc>`;
+        const newCurTc = `<a:tc hMerge="1"><a:tcPr/></a:tc>`; // 셀 자체는 남기되(구조 유지) hMerge 처리
+        trStr = trStr.replace(prevFull, newPrevTc).replace(curFull, newCurTc);
+        changed = true;
+        break; // 한 행에서 병합은 1회만
+      }
+    }
+    return trStr;
+  });
+
+  if (!changed) return xml;
+  let i = 0;
+  tbl = tbl.replace(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g, () => newTrList[i++]);
+  return xml.replace(tblMatch[0], tbl);
+}
+
+/**
+ * 표에서 단순(gridSpan으로 교차되지 않는) 컬럼 하나를 완전히 삭제한다.
+ * 삭제되는 컬럼의 너비는 살아남은 마지막 컬럼에 합산해서 표 전체 너비를 유지한다.
+ * 안전장치: 그 컬럼을 gridSpan으로 가로지르는 헤더 셀이 하나라도 있으면 삭제를 포기한다
+ * (복잡한 병합 재계산 없이, 구조가 안전할 때만 처리).
+ * @param {string} xml
+ * @param {number} colIndex  0-based 컬럼 인덱스
+ * @returns {string}
+ */
+function removeSimpleTableColumn(xml, colIndex) {
+  const tblMatch = xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/);
+  if (!tblMatch) return xml;
+  let tbl = tblMatch[0];
+
+  const trListCheck = tbl.match(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g) || [];
+  for (const trStr of trListCheck) {
+    const tcOpens = [...trStr.matchAll(/<a:tc([^>]*)>/g)];
+    let idx = 0;
+    for (const m of tcOpens) {
+      const attrs = m[1];
+      const gridSpanMatch = attrs.match(/gridSpan="(\d+)"/);
+      const isHMergeCont = /hMerge="1"/.test(attrs);
+      if (gridSpanMatch && !isHMergeCont) {
+        const span = parseInt(gridSpanMatch[1], 10);
+        if (colIndex > idx && colIndex < idx + span) {
+          console.warn('[PptEngine] removeSimpleTableColumn: 컬럼', colIndex, '이 gridSpan 병합 영역이라 안전하게 건너뜁니다.');
+          return xml;
+        }
+      }
+      idx += 1;
+    }
+  }
+
+  const gridColRegex = /<a:gridCol\b[^>]*>[\s\S]*?<\/a:gridCol>/g;
+  const gridCols = tbl.match(gridColRegex) || [];
+  if (colIndex >= gridCols.length) return xml;
+  const removedWMatch = gridCols[colIndex].match(/w="(\d+)"/);
+  const removedW = removedWMatch ? parseInt(removedWMatch[1], 10) : 0;
+  const survivingGridCols = gridCols.filter((_, i) => i !== colIndex);
+  if (survivingGridCols.length && removedW > 0) {
+    const lastIdx = survivingGridCols.length - 1;
+    const curWMatch = survivingGridCols[lastIdx].match(/w="(\d+)"/);
+    const curW = curWMatch ? parseInt(curWMatch[1], 10) : 0;
+    survivingGridCols[lastIdx] = survivingGridCols[lastIdx].replace(/w="\d+"/, `w="${curW + removedW}"`);
+  }
+  tbl = tbl.replace(/(<a:tblGrid>)[\s\S]*?(<\/a:tblGrid>)/, (m, open, close) => open + survivingGridCols.join('') + close);
+
+  const trList = tbl.match(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g) || [];
+  const newTrList = trList.map(trStr => {
+    let idx = -1;
+    return trStr.replace(/<a:tc\b[^>]*>[\s\S]*?<\/a:tc>/g, (m) => {
+      idx += 1;
+      return idx === colIndex ? '' : m;
+    });
+  });
+  let i = 0;
+  tbl = tbl.replace(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g, () => newTrList[i++]);
+
+  return xml.replace(tblMatch[0], tbl);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 4. generateMenuPpt() — 단일 메뉴 PPT 생성 디스패처
 // ═══════════════════════════════════════════════════════════════
@@ -1036,9 +1152,18 @@ async function generateMenuPpt(menu, vm) {
         // rowSpan 병합을 안전하게 재조정하면서 통째로 삭제
         const slideFilesAcs = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f));
         for (const slideFile of slideFilesAcs) {
-          const xmlBefore = await zip.file(slideFile).async('string');
-          const xmlAfter  = removeUnfilledDomainRows(xmlBefore);
-          if (xmlAfter !== xmlBefore) zip.file(slideFile, xmlAfter);
+          let x = await zip.file(slideFile).async('string');
+          const before = x;
+          x = removeUnfilledDomainRows(x);
+          // 분야 그룹이 세분화 없이 단일 분야로 collapse된 경우, [분야n]+[분야n-1] 셀을 가로 병합
+          x = mergeCollapsedDomainSubColumn(x);
+          // 시정조치확인 결과가 있는 단계가 템플릿 최대치(3개)보다 적으면, 안 쓰는 단계 컬럼을 삭제
+          // ⚠️ 이 템플릿은 [단계n] 컬럼이 인덱스 2+n에 고정되어 있음 — 템플릿이 바뀌면 같이 수정 필요
+          const usedStageCount = Object.keys(stageMap).filter(k => /^\[단계\d+\]$/.test(k)).length;
+          for (let n = 3; n > usedStageCount; n--) {
+            x = removeSimpleTableColumn(x, 2 + n);
+          }
+          if (x !== before) zip.file(slideFile, x);
         }
 
         console.log('[PptEngine] ACTION_CONFIRM_STAFF 치환 완료:', {
