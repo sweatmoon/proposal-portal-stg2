@@ -706,28 +706,29 @@ function splitDomainBase(domain) {
 }
 
 /**
- * ⚠️ ACTION_CONFIRM_STAFF 템플릿(3.2 시정조치확인 수행 인력)은 표 구조상
- * "그룹별 이름 슬롯 개수"가 rowSpan 병합으로 고정되어 있음:
- *   분야1(1칸) → 분야2(최대 5칸, 하위분화 시 -1~-5) → 분야3(1칸) → 분야4(1칸)
- * 실제 분야 데이터가 몇 개든 등장 순서대로 이 고정 슬롯에 매핑한다.
- * 템플릿이 바뀌어 슬롯 개수가 달라지면 이 배열도 같이 수정해야 한다.
+ * ACTION_CONFIRM_STAFF 템플릿(3.2 시정조치확인 수행 인력)의 인력 표는 동일한 구조의 행이
+ * 최대 MAX_STAFF_ROWS개까지 반복되는 형태다: 각 행 = [그룹n][세부n][이름n]×3.
+ * 실제 분야/인원이 몇 개든 등장 순서대로 앞에서부터 채우고, 남는 행은 자동으로 삭제된다
+ * (removeUnfilledDomainRows). 템플릿을 늘리면(행 추가) 이 숫자만 늘리면 된다.
  */
-const ACTION_CONFIRM_STAFF_SLOT_CAPACITY = [1, 5, 1, 1]; // [그룹1, 그룹2, 그룹3, 그룹4]의 이름 슬롯 수
+const ACTION_CONFIRM_STAFF_MAX_ROWS = 15;
 
 /**
- * 감리원(vm.auditMembers) 목록으로부터 [분야n] / [분야n-m] / [이름n] 슬롯을 구성
+ * 감리원(vm.auditMembers) 목록으로부터 [그룹n] / [세부n] / [이름n] 슬롯을 구성
  * - 등장 순서를 유지하며 고유 분야를 추출, 괄호 앞부분(base)이 같으면 한 그룹으로 묶음
- * - base가 2개 이상의 변형(variant)을 가지면 [분야n-1], [분야n-2]...로 세분화하고
- *   [분야n]은 base(그룹명)만 표시. base가 1개뿐이면 세분화 없이 [분야n] 하나로 처리
- * - [이름n] 번호는 "실제 사용 개수"가 아니라 slotCapacity가 정해둔 그룹별 고정 자리에서 배정
- *   (그룹2가 실제로 2개만 쓰더라도 5칸을 예약하고 있으므로 그룹3은 항상 7번부터 시작)
+ * - 한 그룹에 변형(variant)이 2개 이상이면 각 변형마다 행을 하나씩 배정하고
+ *   [그룹n]에는 base(괄호 뺀 그룹명)를, [세부n]에는 각자의 원문 전체를 넣는다
+ * - 변형이 1개뿐이면 [그룹n]에 원문 그대로, [세부n]은 빈 문자열(안 씀)
+ * - [그룹n]/[세부n]/[이름n]의 n은 행이 나열되는 순서 그대로 1번부터 순차 배정
+ *   (더 이상 그룹별로 고정된 자리를 예약하지 않음 — 템플릿이 모든 행을 동일하게 지원)
  * - 한 분야에 감리원이 여러 명이면 이름을 ', '로 이어붙임
+ * - 템플릿 최대 행 수(maxRows)를 넘으면 그 이후 분야는 표시되지 않고 경고만 남김
  *
  * @param {Array<{name:string, field:string}>} auditMembers
- * @param {number[]} slotCapacity  그룹별 이름 슬롯 예약 개수
- * @returns {Array<{fieldPlaceholder:string, fieldValue:string, namePlaceholder:string|null, names:string[]}>}
+ * @param {number} maxRows  템플릿이 지원하는 최대 인력 행 수
+ * @returns {Array<{groupPlaceholder:string, groupValue:string, subPlaceholder:string, subValue:string, namePlaceholder:string, names:string[]}>}
  */
-function buildDomainSlots(auditMembers, slotCapacity) {
+function buildDomainSlots(auditMembers, maxRows) {
   const domainOrder = [];
   const domainNames = new Map(); // domain(원문) → [이름들]
   (auditMembers || []).forEach(m => {
@@ -746,46 +747,24 @@ function buildDomainSlots(auditMembers, slotCapacity) {
   });
 
   const slots = [];
-  let nameSlotCursor = 1; // 다음 그룹이 시작할 이름 슬롯 번호
-  groupOrder.forEach((base, gi) => {
-    const groupNo = gi + 1;
-    const capacity = slotCapacity[gi] ?? 1;
+  let rowN = 1;
+  groupOrder.forEach(base => {
     const variants = groupMap.get(base);
-    const baseOffset = nameSlotCursor;
-
-    if (gi >= slotCapacity.length) {
-      console.warn(`[PptEngine] ACTION_CONFIRM_STAFF: 템플릿 슬롯(${slotCapacity.length}개)보다 분야가 많습니다 — "${base}" 이후 분야는 템플릿에 자리가 없어 표시되지 않을 수 있습니다.`);
-    }
-
-    if (variants.length === 1) {
-      slots.push({
-        fieldPlaceholder: `[분야${groupNo}]`,
-        fieldValue: variants[0].full,
-        namePlaceholder: `[이름${baseOffset}]`,
-        names: domainNames.get(variants[0].full) || [],
-      });
-    } else {
-      // 상위 그룹 헤더: 괄호 뺀 base만 표시, 이름 슬롯 없음
-      slots.push({
-        fieldPlaceholder: `[분야${groupNo}]`,
-        fieldValue: base,
-        namePlaceholder: null,
-        names: [],
-      });
-      if (variants.length > capacity) {
-        console.warn(`[PptEngine] ACTION_CONFIRM_STAFF: "${base}" 그룹에 하위 분야가 ${variants.length}개인데 템플릿 슬롯은 ${capacity}개뿐입니다 — 초과분(${variants.length - capacity}개)은 표시되지 않습니다.`);
+    variants.forEach(v => {
+      if (rowN > maxRows) {
+        console.warn(`[PptEngine] ACTION_CONFIRM_STAFF: 템플릿 최대 인력 행(${maxRows}개)을 초과했습니다 — "${v.full}"은(는) 표시되지 않습니다. 템플릿에 행을 추가하고 ACTION_CONFIRM_STAFF_MAX_ROWS 값을 늘려주세요.`);
+        return;
       }
-      variants.forEach((v, vi) => {
-        if (vi >= capacity) return; // 템플릿에 더 이상 자리 없음
-        slots.push({
-          fieldPlaceholder: `[분야${groupNo}-${vi + 1}]`,
-          fieldValue: v.full,
-          namePlaceholder: `[이름${baseOffset + vi}]`,
-          names: domainNames.get(v.full) || [],
-        });
+      slots.push({
+        groupPlaceholder: `[그룹${rowN}]`,
+        groupValue: base,
+        subPlaceholder: `[세부${rowN}]`,
+        subValue: variants.length > 1 ? v.full : '', // 세분화 없으면 세부 칸은 비움
+        namePlaceholder: `[이름${rowN}]`,
+        names: domainNames.get(v.full) || [],
       });
-    }
-    nameSlotCursor += capacity;
+      rowN += 1;
+    });
   });
   return slots;
 }
@@ -808,13 +787,13 @@ function buildStagePlaceholderMap(stages) {
 }
 
 /**
- * 표(<a:tbl>) 안에서, 치환 후에도 "[분야...]" / "[이름...]" 플레이스홀더만 남아있는
- * (=실제 데이터가 없어 채워지지 않은) 행을 통째로 삭제한다.
+ * 표(<a:tbl>) 안에서, 치환 후에도 "[그룹...]" / "[세부...]" / "[이름...]" 플레이스홀더만
+ * 남아있는(=실제 데이터가 없어 채워지지 않은) 행을 통째로 삭제한다.
  * rowSpan으로 그 행을 관통하던 다른 열의 병합 셀은 rowSpan 값을 삭제한 행 수만큼 자동으로
  * 줄여 표 구조가 깨지지 않도록 한다 (병합 범위 밖 행은 건드리지 않음).
  *
- * 안전장치: "[분야...]"/"[이름...]" 계열 플레이스홀더로만 이뤄진 행만 대상으로 하므로
- * 실제 라벨/설명 텍스트가 있는 행(감리 단계, 투입 공수 등)은 절대 삭제되지 않는다.
+ * 안전장치: "[그룹...]"/"[세부...]"/"[이름...]" 계열 플레이스홀더로만 이뤄진 행만 대상으로
+ * 하므로 실제 라벨/설명 텍스트가 있는 행(감리 단계, 투입 공수 등)은 절대 삭제되지 않는다.
  *
  * @param {string} xml  슬라이드 XML 문자열 (치환 완료된 상태)
  * @returns {string}
@@ -828,8 +807,8 @@ function removeUnfilledDomainRows(xml) {
   if (!trList.length) return xml;
 
   const unfilledTest = (text) => {
-    const stripped = text.replace(/\[(?:분야|이름)[0-9]*(?:-[0-9]+)?\]/g, '').trim();
-    return stripped === '' && /\[(?:분야|이름)/.test(text);
+    const stripped = text.replace(/\[(?:그룹|세부|이름)[0-9]*\]/g, '').trim();
+    return stripped === '' && /\[(?:그룹|세부|이름)/.test(text);
   };
 
   const rowsInfo = trList.map((trStr, rowIdx) => {
@@ -888,61 +867,6 @@ function removeUnfilledDomainRows(xml) {
   let i = 0;
   const newTbl = tbl.replace(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g, () => newTrList[i++]);
   return xml.replace(tbl, newTbl);
-}
-
-/**
- * 분야 그룹이 세분화 없이 단일 분야로 collapse된 경우(예: "응용시스템" 하위분야가 실제로는
- * 1개뿐인 사업) — "[분야n]"은 값이 채워졌는데 바로 옆 "[분야n-m]" 칸만 미채움으로 남는 상황을
- * 감지해서 두 셀을 가로(gridSpan)로 병합한다. (템플릿에서 분야1/분야3/분야4 행이 원래
- * 쓰고 있는 "그룹명 하나로 합쳐서 표시" 방식과 동일하게 맞춰주는 것)
- * @param {string} xml
- * @returns {string}
- */
-function mergeCollapsedDomainSubColumn(xml) {
-  const tblMatch = xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/);
-  if (!tblMatch) return xml;
-  let tbl = tblMatch[0];
-
-  const trList = tbl.match(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g) || [];
-  let changed = false;
-  const newTrList = trList.map(trStr => {
-    const tcMatches = [...trStr.matchAll(/<a:tc\b([^>]*)>([\s\S]*?)<\/a:tc>/g)];
-    if (tcMatches.length < 2) return trStr;
-
-    for (let i = 1; i < tcMatches.length; i++) {
-      const prevFull = tcMatches[i - 1][0];
-      const prevAttrs = tcMatches[i - 1][1];
-      const prevInner = tcMatches[i - 1][2];
-      const prevText = [...prevInner.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]).join('').trim();
-
-      const curFull = tcMatches[i][0];
-      const curInner = tcMatches[i][2];
-      const curText = [...curInner.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]).join('').trim();
-
-      const prevIsFilledGroupHeader = prevText !== '' && !/\[분야/.test(prevText);
-      const curIsUnfilledSub = /^\[분야[0-9]+-[0-9]+\]$/.test(curText);
-
-      if (prevIsFilledGroupHeader && curIsUnfilledSub) {
-        const gridSpanMatch = prevAttrs.match(/gridSpan="(\d+)"/);
-        const prevSpan = gridSpanMatch ? parseInt(gridSpanMatch[1], 10) : 1;
-        const newSpan = prevSpan + 1;
-        const newPrevAttrs = gridSpanMatch
-          ? prevAttrs.replace(/gridSpan="\d+"/, `gridSpan="${newSpan}"`)
-          : `${prevAttrs} gridSpan="${newSpan}"`;
-        const newPrevTc = `<a:tc${newPrevAttrs}>${prevInner}</a:tc>`;
-        const newCurTc = `<a:tc hMerge="1"><a:tcPr/></a:tc>`; // 셀 자체는 남기되(구조 유지) hMerge 처리
-        trStr = trStr.replace(prevFull, newPrevTc).replace(curFull, newCurTc);
-        changed = true;
-        break; // 한 행에서 병합은 1회만
-      }
-    }
-    return trStr;
-  });
-
-  if (!changed) return xml;
-  let i = 0;
-  tbl = tbl.replace(/<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g, () => newTrList[i++]);
-  return xml.replace(tblMatch[0], tbl);
 }
 
 /**
@@ -1133,7 +1057,7 @@ async function generateMenuPpt(menu, vm) {
 
         const menuTitle  = [menu.menu_number, menu.menu_name].filter(Boolean).join(' ');
         const clientOrg  = (vm && vm.project && vm.project.client) || '';
-        const domainSlots = buildDomainSlots(vm.auditMembers || [], ACTION_CONFIRM_STAFF_SLOT_CAPACITY);
+        const domainSlots = buildDomainSlots(vm.auditMembers || [], ACTION_CONFIRM_STAFF_MAX_ROWS);
         const stageMap    = buildStagePlaceholderMap(vm.stages || []);
 
         const placeholderMap = {
@@ -1142,21 +1066,20 @@ async function generateMenuPpt(menu, vm) {
           ...stageMap,
         };
         domainSlots.forEach(slot => {
-          placeholderMap[slot.fieldPlaceholder] = slot.fieldValue;
-          if (slot.namePlaceholder) placeholderMap[slot.namePlaceholder] = slot.names.join(', ');
+          placeholderMap[slot.groupPlaceholder] = slot.groupValue;
+          placeholderMap[slot.subPlaceholder]   = slot.subValue;
+          placeholderMap[slot.namePlaceholder]  = slot.names.join(', ');
         });
 
         await applyPlaceholdersToZip(zip, placeholderMap);
 
-        // 치환 후에도 [분야...]/[이름...]만 남은(=템플릿보다 실제 분야 수가 적은) 행은
+        // 치환 후에도 [그룹...]/[세부...]/[이름...]만 남은(=템플릿보다 실제 인력이 적은) 행은
         // rowSpan 병합을 안전하게 재조정하면서 통째로 삭제
         const slideFilesAcs = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f));
         for (const slideFile of slideFilesAcs) {
           let x = await zip.file(slideFile).async('string');
           const before = x;
           x = removeUnfilledDomainRows(x);
-          // 분야 그룹이 세분화 없이 단일 분야로 collapse된 경우, [분야n]+[분야n-1] 셀을 가로 병합
-          x = mergeCollapsedDomainSubColumn(x);
           // 시정조치확인 결과가 있는 단계가 템플릿 최대치(3개)보다 적으면, 안 쓰는 단계 컬럼을 삭제
           // ⚠️ 이 템플릿은 [단계n] 컬럼이 인덱스 2+n에 고정되어 있음 — 템플릿이 바뀌면 같이 수정 필요
           const usedStageCount = Object.keys(stageMap).filter(k => /^\[단계\d+\]$/.test(k)).length;
@@ -1168,7 +1091,7 @@ async function generateMenuPpt(menu, vm) {
 
         console.log('[PptEngine] ACTION_CONFIRM_STAFF 치환 완료:', {
           단계: stageMap,
-          분야: domainSlots.map(s => `${s.fieldPlaceholder}=${s.fieldValue}` + (s.namePlaceholder ? ` / ${s.namePlaceholder}=${s.names.join(',')}` : '')),
+          인력: domainSlots.map(s => `${s.groupPlaceholder}=${s.groupValue}${s.subValue ? '('+s.subValue+')' : ''} / ${s.namePlaceholder}=${s.names.join(',')}`),
         });
         result = { zip, mergeStrategy: 'FOREIGN_TEMPLATE' };
       } catch (e) {
