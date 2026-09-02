@@ -164,8 +164,11 @@ const HISTORY_HEADER_MARKERS = ['번호', '연도', '사 업 명', '주관기관
 const IT_CAREER_HEADER_MARKERS = ['기간(년)', '경력', '담당 업무', '유사 경력의 근거']
 const CERT_HEADER_MARKERS = ['자격증 명', '발급처', '구분 (국가 공인 여부)', '관련 분야']
 
-function fmtYear(yearmonth: string | null): string {
-  return yearmonth ? yearmonth.split('.')[0] : ''
+/** personnel_audit_history.audit_yearmonth는 이미 "YYYY.MM" 형식으로 저장돼 있으므로
+ *  그대로 보여준다(2026-09-02 사용자 확인 — 예전엔 연도만 잘라서 보여줬는데, 월까지
+ *  "2026.08"처럼 그대로 보이게 수정). */
+function fmtYearMonth(yearmonth: string | null): string {
+  return yearmonth ?? ''
 }
 function fmtParticipation(rate: number | null): string {
   return rate === null || rate === undefined ? '' : `${rate}%`
@@ -365,13 +368,10 @@ export async function buildCareerZip(templateBuf: Buffer, projectId: number, tit
 
       const toRowData = (entry: (typeof withMatch)[number], no: number): HistoryRowData => ({
         no,
-        year: fmtYear(entry.h.audit_yearmonth),
+        year: fmtYearMonth(entry.h.audit_yearmonth),
         projectName: entry.h.project_name,
         matchedText: entry.match.bracketText,
-        matchedColor:
-          entry.match.matchType === 'keyword'
-            ? ORG_CATEGORY_PATTERN.test(entry.match.bracketText ?? '') ? 'green' : 'red'
-            : null,
+        isOrgMatch: entry.match.matchType === 'keyword' && ORG_CATEGORY_PATTERN.test(entry.match.bracketText ?? ''),
         clientOrg: entry.h.client_org ?? '',
         sector: entry.h.sector ?? '',
         domain: entry.h.domain ?? '',

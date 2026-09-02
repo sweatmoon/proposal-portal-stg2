@@ -7,12 +7,15 @@
  * "사업명" 셀은 템플릿 원래 형식 그대로 "[키워드] 사업명" — 매칭된 키워드를 대괄호로 감싸
  * 앞에 붙이고, 그 뒤에 실제 사업명 전체를 붙인다(사업명 안의 텍스트를 찾아 강조하는 게
  * 아니라, 대괄호 태그를 사업명 앞에 그대로 붙이는 표기법이다 — 2026-09-01 사용자 재확인).
- * 일반 키워드는 대괄호까지 빨간 글자색으로 강조하고, "주관기관/발주기관" 카테고리로
- * 매핑된 키워드는 글자색이 아니라 **그 행 전체의 배경색**을 템플릿의 연한 초록색
- * (DCF2E6, 원본에서도 쓰던 색 그대로)으로 칠한다 — "초록색 = 배경색"이 사용자 의도였음
- * (2026-09-01 재확인). 매칭이 없거나 일반 키워드 매칭인 행은 배경을 흰색(없음)으로 되돌린다
- * — 원본 템플릿은 모든 행에 이 초록 배경이 깔려 있었지만, 그건 "주관기관 매칭 행만
- * 표시"하려던 의도였던 것으로 보고 조건부로 바꿨다.
+ * 대괄호 글자색은 매칭된 키워드면(일반 키워드든 "주관기관/발주기관" 카테고리든 상관없이)
+ * 항상 빨간색으로 강조한다(2026-09-02 사용자 확인 — 예전엔 주관기관 매칭만 빨간색이 안
+ * 붙었는데, 그것도 붙이는 걸로 수정). 거기에 더해서, "주관기관/발주기관" 카테고리로
+ * 매핑된 키워드는 **그 행 전체의 배경색**도 템플릿의 연한 초록색(DCF2E6, 원본에서도
+ * 쓰던 색 그대로)으로 추가로 칠한다 — 빨간 글자색과 초록 배경은 서로 배타적이 아니라
+ * 함께 적용되는 것(주관기관 매칭 행 = 빨간 대괄호 글자 + 초록 배경). 매칭이 없거나 일반
+ * 키워드 매칭인 행은 배경을 흰색(없음)으로 되돌린다 — 원본 템플릿은 모든 행에 이 초록
+ * 배경이 깔려 있었지만, 그건 "주관기관 매칭 행만 표시"하려던 의도였던 것으로 보고
+ * 조건부로 바꿨다.
  *
  * 완전히 같은 사업(같은 프로젝트를 같은 조건으로 두 번 이상 기록한 중복 행)은 호출 쪽에서
  * 미리 제거하고 넘겨줘야 한다. 같은 사업명인데 다른 값이 있는 연속된 행들을
@@ -39,10 +42,11 @@ export interface HistoryRowData {
   no: number
   year: string
   projectName: string
-  /** 대괄호 안에 넣을 매칭된 키워드 텍스트 (없으면 대괄호 자체를 안 씀) */
+  /** 대괄호 안에 넣을 매칭된 키워드 텍스트 (없으면 대괄호 자체를 안 씀, 있으면 항상 빨간 글자) */
   matchedText: string | null
-  /** matchedText가 있을 때만 의미 있음 — "주관기관" 카테고리 매치면 초록, 그 외엔 빨강 */
-  matchedColor: 'red' | 'green' | null
+  /** "주관기관/발주기관" 카테고리 매치면 true — 이 행 전체에 초록 배경을 추가로 칠한다
+   *  (빨간 대괄호 글자와 별개로 적용됨, matchedText가 없으면 의미 없음). */
+  isOrgMatch: boolean
   clientOrg: string
   sector: string
   domain: string
@@ -71,15 +75,14 @@ const KEYWORD_CELL_RE =
 
 /** "[키워드] 사업명" 형식 그대로 재구성한다 — 사업명 문자열 안에서 찾아 강조하는 게 아니라,
  *  매칭된 키워드를 대괄호 태그로 앞에 붙이고 그 뒤에 사업명 전체를 그대로 붙인다.
- *  일반 키워드는 대괄호까지 빨간 글자색, 주관기관/발주기관 매칭은 글자색은 그대로 두고
- *  (배경색으로 표시하므로) 검정 그대로 둔다. */
+ *  매칭된 키워드가 있으면(일반이든 주관기관/발주기관 카테고리든) 대괄호는 항상 빨간
+ *  글자색이다 — 주관기관 매칭의 초록 배경은 fillCell()에서 행 전체에 별도로 칠한다. */
 function buildProjectNameRuns(entry: HistoryRowData, blackRPr: string, redRPr: string): string {
   if (!entry.matchedText) {
     return `<a:r>${blackRPr}<a:t>${esc(entry.projectName)}</a:t></a:r>`
   }
-  const bracketRPr = entry.matchedColor === 'red' ? redRPr : blackRPr
   return (
-    `<a:r>${bracketRPr}<a:t>[${esc(entry.matchedText)}]</a:t></a:r>` +
+    `<a:r>${redRPr}<a:t>[${esc(entry.matchedText)}]</a:t></a:r>` +
     `<a:r>${blackRPr}<a:t> ${esc(entry.projectName)}</a:t></a:r>`
   )
 }
@@ -139,7 +142,7 @@ function fillCell(cellTpl: string, colIndex: number, entry: HistoryRowData): str
     const bracket = COLUMN_BRACKETS[colIndex]
     filled = bracket ? applyPlaceholderMap(cellTpl, { [bracket]: columnValue(colIndex, entry) }) : cellTpl
   }
-  return setCellFill(filled, entry.matchedColor === 'green' ? GREEN_BG_HEX : null)
+  return setCellFill(filled, entry.isOrgMatch ? GREEN_BG_HEX : null)
 }
 
 /** 셀 템플릿을 rowSpan 버전(첫 행)으로 바꾼다. filledCellXml은 이미 값이 채워진 상태여야 함. */
@@ -178,7 +181,7 @@ export function fillHistoryCluster(singleRowTpl: string, entries: HistoryRowData
     const uniform = ci === 2 ? true : ci === 0 ? false : entries.every(e => columnValue(ci, e) === columnValue(ci, entries[0]))
     if (uniform) {
       rowsOut[0][ci] = toRowSpanCell(fillCell(cellsTpl[ci], ci, entries[0]), n)
-      const fillHex = entries[0].matchedColor === 'green' ? GREEN_BG_HEX : null
+      const fillHex = entries[0].isOrgMatch ? GREEN_BG_HEX : null
       for (let ri = 1; ri < n; ri++) rowsOut[ri][ci] = toVMergeCell(cellsTpl[ci], fillHex)
     } else {
       for (let ri = 0; ri < n; ri++) rowsOut[ri][ci] = fillCell(cellsTpl[ci], ci, entries[ri])

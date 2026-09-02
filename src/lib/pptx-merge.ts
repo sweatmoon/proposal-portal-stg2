@@ -12,8 +12,17 @@
  * (예: "../slideLayouts/slideLayout2.xml")는 어느 덱에서 왔든 동일해서, 그대로 둬도
  * base 안의 같은 파일을 정확히 가리킨다.
  *
- * 마스터가 서로 다른 덱을 합쳐야 하는 경우는 지원하지 않는다(그 경우 레이아웃/미디어까지
+ * 마스터가 서로 다른 덱을 합쳐야 하는 경우는 지원하지 않는다(그 경우 레이아웃까지
  * 전부 복사하고 이름 충돌을 피해야 해서 훨씬 복잡함 — 지금은 필요하지 않아 구현 안 함).
+ *
+ * ⚠️ media 파일 처리 (2026-09-02 버그 수정): base(표지) 이외의 덱이 자기 슬라이드에만 쓰는
+ * 고유 이미지(예: 동의서의 인력별 개인도장 — NAS에서 받아온 사람마다 다른 파일)를 가지고
+ * 있으면, 그 media 파일도 반드시 base로 복사해야 합니다. 예전에는 슬라이드 XML/rels만
+ * 옮기고 media 파일 자체는 안 옮겨서, 병합 후 그 이미지 참조만 남고 실제 파일은 빠져
+ * "그림을 표시할 수 없습니다" 깨진 이미지가 되는 버그가 있었습니다. base 자신의 media는
+ * 마스터/레이아웃이 그 파일명을 그대로 참조하므로 이름을 바꾸지 않고 그대로 두고, 그 외
+ * 덱들의 media만 이름 충돌 없이 새 이름을 붙여 복사한 뒤 그 덱의 슬라이드 rels에서
+ * Target을 새 이름으로 바꿔줍니다.
  */
 import type JSZip from 'jszip'
 
@@ -41,11 +50,38 @@ export async function mergeDecksSharingMaster(zips: JSZip[]): Promise<JSZip> {
   presRelsXml = presRelsXml.replace(/<Relationship\b[^>]*Type="[^"]*\/slide"[^>]*\/>/g, '')
   ctXml = ctXml.replace(/<Override[^>]*presentationml\.slide\+xml[^>]*\/>/g, '')
 
+  // base(index 0) 이외 덱들의 고유 media를 파일명 충돌 없이 base로 복사하고, 그 덱의
+  // 슬라이드 rels에서 참조할 새 이름을 기억해둔다. base 자신의 media는 이름을 바꾸지
+  // 않는다(마스터/레이아웃이 원래 이름을 그대로 참조하기 때문).
+  let mediaCounter = 0
+  const mediaRenameMaps: Map<string, string>[] = [] // zips와 같은 인덱스, key: 원래 파일명(예: "stamp_p1.png") → 새 파일명
+  for (let zi = 0; zi < zips.length; zi++) {
+    const renameMap = new Map<string, string>()
+    mediaRenameMaps.push(renameMap)
+    if (zi === 0) continue
+
+    // Object.keys(zip.files)에는 "ppt/media/" 같은 디렉터리 엔트리도 섞여 나오는데,
+    // 그건 zip.file(path)로 열면 null이라 반드시 걸러야 한다(디렉터리 엔트리에 .dir===true).
+    const mediaFiles = Object.keys(zips[zi].files).filter(
+      f => /^ppt\/media\//.test(f) && !zips[zi].files[f].dir
+    )
+    for (const mf of mediaFiles) {
+      const originalName = mf.replace('ppt/media/', '')
+      const dot = originalName.lastIndexOf('.')
+      const ext = dot >= 0 ? originalName.slice(dot) : ''
+      const newName = `merged_${++mediaCounter}${ext}`
+      const content = await zips[zi].file(mf)!.async('nodebuffer')
+      base.file(`ppt/media/${newName}`, content)
+      renameMap.set(originalName, newName)
+    }
+  }
+
   // base(=zips[0])의 원본 슬라이드 내용을 먼저 전부 메모리에 읽어둔다 — base의 슬라이드 파일을
   // 지우기 전에 읽어야 한다. base도 아래 zips 순회 대상에 포함되므로(표지 자신의 슬라이드도
   // 다시 붙여야 함), 먼저 지우고 나서 base.files를 읽으면 표지 내용이 통째로 사라진다.
-  const allSlideEntries: { xml: string; relXml: string | null }[] = []
-  for (const zip of zips) {
+  const allSlideEntries: { xml: string; relXml: string | null; mediaRenameMap: Map<string, string> }[] = []
+  for (let zi = 0; zi < zips.length; zi++) {
+    const zip = zips[zi]
     const slideFiles = Object.keys(zip.files)
       .filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
       .sort((a, b) => Number(a.match(/slide(\d+)/)![1]) - Number(b.match(/slide(\d+)/)![1]))
@@ -54,7 +90,7 @@ export async function mergeDecksSharingMaster(zips: JSZip[]): Promise<JSZip> {
       const relFile = sf.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels'
       const relXmlFile = zip.file(relFile)
       const relXml = relXmlFile ? await relXmlFile.async('string') : null
-      allSlideEntries.push({ xml, relXml })
+      allSlideEntries.push({ xml, relXml, mediaRenameMap: mediaRenameMaps[zi] })
     }
   }
 
@@ -98,7 +134,13 @@ export async function mergeDecksSharingMaster(zips: JSZip[]): Promise<JSZip> {
     const relTags = relEntries.map(e => {
       const newId = `rId${++maxRid}`
       rIdMap[e.id] = newId
-      return `<Relationship Id="${newId}" Type="${e.type}" Target="${e.target}"/>`
+      // 이 덱만의 media를 새 이름으로 복사해뒀다면, Target도 그 새 이름을 가리키게 바꾼다.
+      let target = e.target
+      const mediaMatch = target.match(/^\.\.\/media\/(.+)$/)
+      if (mediaMatch && entry.mediaRenameMap.has(mediaMatch[1])) {
+        target = `../media/${entry.mediaRenameMap.get(mediaMatch[1])}`
+      }
+      return `<Relationship Id="${newId}" Type="${e.type}" Target="${target}"/>`
     })
     const newRelsXml =
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' +
