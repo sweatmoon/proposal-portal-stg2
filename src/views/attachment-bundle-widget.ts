@@ -155,14 +155,30 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     ...BUNDLE_ITEM_DEFS.map(d => ({ id: d.id, label: d.templateLabel || d.label, icon: d.icon, required: false })),
   ]
 
-  const bundleFiles = {} // id('cover'|'schedule'|'career'|'consent') -> File — 페이지에 머무는 동안 유지
+  // 1.일정표/2.실적경력/3.동의서는 거의 항상 같이 나가는 "기본 3종"이라, 첨부PPT 생성
+  // 버튼을 누를 때마다 항상 체크된 채로 맨 앞 순서 고정으로 시작한다(2026-09-02 사용자
+  // 확인). 그 외 항목(표준재무제표 등, 앞으로 늘어날 "범용" 항목들)은 매번 체크 해제
+  // 상태로 그 뒤에 붙고, 서로간에는 자유롭게 드래그로 순서를 바꿀 수 있다 — 기본 3종
+  // 앞으로는 절대 끼어들 수 없다(resetBundleSelection/렌더링에서 기본 3종은 draggable을
+  // 아예 안 붙여서 드래그 시작 자체가 안 되고, dragover도 기본 3종 위에서는 무시한다).
+  const CORE_IDS = ['schedule', 'career', 'consent']
+
+  const bundleFiles = {} // id('cover'|'schedule'|'career'|'consent'|...) -> File — 페이지에 머무는 동안 유지
   const bundleItemChecked = {} // id -> boolean
-  let bundleItemOrder = BUNDLE_ITEM_DEFS.map(d => d.id) // 드래그로 바뀌는 현재 순서
-  BUNDLE_ITEM_DEFS.forEach(d => { bundleItemChecked[d.id] = true }) // 기본은 전부 체크
+  let bundleItemOrder = [] // 드래그로 바뀌는 현재 순서 (모달 열 때마다 resetBundleSelection이 채움)
 
   let bundleProjectId = null
   let bundleBtnEl = null
   let bundleDragId = null
+
+  /** 첨부PPT 생성 모달을 열 때마다 호출 — 기본 3종은 체크+맨 앞 고정, 나머지는 체크 해제
+   *  상태로 그 뒤에 배치한다. 업로드해둔 템플릿 파일(bundleFiles)은 그대로 유지한다. */
+  function resetBundleSelection() {
+    const extraIds = BUNDLE_ITEM_DEFS.map(d => d.id).filter(id => !CORE_IDS.includes(id))
+    bundleItemOrder = [...CORE_IDS, ...extraIds]
+    CORE_IDS.forEach(id => { bundleItemChecked[id] = true })
+    extraIds.forEach(id => { bundleItemChecked[id] = false })
+  }
 
   // ── 템플릿 업로드 슬롯 (클릭 또는 드래그앤드롭) ────────────────────
   function renderTemplateSlots() {
@@ -217,14 +233,20 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       const def = BUNDLE_ITEM_DEFS.find(d => d.id === id)
       const checked = bundleItemChecked[id]
       const hasFile = !!bundleFiles[id]
+      const locked = CORE_IDS.includes(id)
+      // 기본 3종(locked)은 draggable 자체를 안 붙여서 드래그 시작이 안 되고, dragover도
+      // 안 걸어서 다른 항목이 그 위/사이로 끼어들 수 없다 — 항상 맨 앞 고정.
+      const dragAttrs = locked
+        ? ''
+        : \`draggable="true" ondragstart="bundleDragStart(event,'\${id}')" ondragover="bundleDragOver(event,'\${id}')" ondragend="bundleDragEnd(event)"\`
+      const handleIcon = locked
+        ? '<i class="fas fa-lock text-slate-300 text-xs" title="항상 포함되는 기본 항목 — 순서 고정"></i>'
+        : '<i class="fas fa-grip-vertical text-slate-300 cursor-grab" title="드래그해서 순서 변경"></i>'
       return \`
         <div class="border rounded-xl px-3 py-2.5 flex items-center gap-2 transition
                     \${checked ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-white'}"
-             draggable="true" data-bundle-id="\${id}"
-             ondragstart="bundleDragStart(event,'\${id}')"
-             ondragover="bundleDragOver(event,'\${id}')"
-             ondragend="bundleDragEnd(event)">
-          <i class="fas fa-grip-vertical text-slate-300 cursor-grab" title="드래그해서 순서 변경"></i>
+             data-bundle-id="\${id}" \${dragAttrs}>
+          \${handleIcon}
           <input type="checkbox" class="w-4 h-4 accent-indigo-600" \${checked ? 'checked' : ''}
                  onchange="toggleBundleItem('\${id}', this.checked)">
           <i class="fas \${def.icon} text-indigo-400 text-xs"></i>
@@ -298,6 +320,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   function openBundleModal(id, btnEl) {
     bundleProjectId = id
     bundleBtnEl = btnEl
+    resetBundleSelection()
     document.getElementById('bundleModal').classList.remove('hidden')
     renderBundleList()
     document.getElementById('bundleSchedulePhaseWrap').classList.add('hidden')
