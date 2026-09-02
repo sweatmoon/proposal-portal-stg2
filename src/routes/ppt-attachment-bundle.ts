@@ -16,6 +16,8 @@
  *     src/routes/ppt-schedule.ts               1. 감리원 일정 현황표
  *     src/routes/ppt-career.ts                 2. 투입 감리원별 실적 및 경력
  *     src/routes/ppt-consent.ts                3. 비상근 감리원 참여 동의서
+ *     src/routes/ppt-financial-statement.ts    4. 표준재무제표 (NAS의 회사 표준재무제표 원본을
+ *                                               페이지별 이미지로 뽑아 범용 템플릿에 붙여넣음)
  *   공용 OOXML 조립 유틸 (위 라우트들이 나눠서 사용)
  *     src/lib/pptx-runtext.ts                  [placeholder] 텍스트 치환 (런 분산 대응)
  *     src/lib/pptx-table-rows.ts               일정표류 표 동적 확장(rowSpan/vMerge, 페이지 분할)
@@ -23,6 +25,9 @@
  *     src/lib/pptx-deck.ts                     템플릿 슬라이드(1~N장)를 데이터 개수만큼 복제
  *     src/lib/pptx-cover-toc.ts                표지의 번호 매긴 목차를 선택 항목으로 재작성
  *     src/lib/pptx-merge.ts                    완성된 여러 pptx를 한 파일로 이어붙이기
+ *     src/lib/pptx-image-swap.ts               템플릿의 placeholder 이미지를 실제 이미지로 교체
+ *                                               (동의서 개인도장 · 표준재무제표 페이지가 공유)
+ *     src/lib/nas-client.ts                    Synology NAS(QuickConnect)에서 파일 조회
  *
  * 다른 사이트(예: proposal-portal-main)로 이식하는 방법:
  *   1) 위 파일 전부를 같은 상대 경로로 복사
@@ -63,6 +68,7 @@ import type JSZip from 'jszip'
 import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
+import { buildFinancialStatementZip } from './ppt-financial-statement.js'
 import { buildCoverZip } from './ppt-cover.js'
 import { mergeDecksSharingMaster } from '../lib/pptx-merge.js'
 
@@ -95,6 +101,10 @@ const ATTACHMENT_TYPES: Record<
   consent: {
     label: '비상근 감리원 참여 동의서',
     build: async (buf, projectId, _form, titlePrefix) => (await buildConsentZip(buf, projectId, titlePrefix)).zip,
+  },
+  financial: {
+    label: '표준재무제표',
+    build: async (buf, projectId, _form, titlePrefix) => (await buildFinancialStatementZip(buf, projectId, titlePrefix)).zip,
   },
 }
 

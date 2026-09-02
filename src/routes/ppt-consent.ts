@@ -30,6 +30,7 @@ import { query, queryOne } from '../db/client.js'
 import { applyPlaceholderMap } from '../lib/pptx-runtext.js'
 import { buildMultiSlideDeck } from '../lib/pptx-deck.js'
 import { fetchPersonalStampPngs } from '../lib/nas-client.js'
+import { findPlaceholderImageTarget, replaceSlideImages } from '../lib/pptx-image-swap.js'
 
 const app = new Hono()
 
@@ -80,36 +81,6 @@ function formatDeadlineMinusOneDay(bidDeadline: string | null): string {
   const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])))
   d.setUTCDate(d.getUTCDate() - 1)
   return `${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일`
-}
-
-/** [ppt-portal 추가 기능 — 시험 적용, 2026-09-02] 복제된 사람별 슬라이드에서 "도장"
- *  placeholder 이미지를 NAS의 실제 개인도장 이미지로 바꿔치기한다. 관계(rels)의 Target
- *  문자열만 바꾸는 방식이라 슬라이드 XML이나 관계 id는 그대로 둔다 — 사람 순서(people
- *  배열)와 buildMultiSlideDeck이 만든 슬라이드 번호(1부터, people과 같은 순서)가
- *  일치한다는 전제. 도장을 못 찾은 사람은 원래 placeholder 그림 그대로 둔다(NAS 조회
- *  실패가 PPT 생성 자체를 막으면 안 되므로). */
-async function applyPersonalStamps(zip: JSZip, people: NonFulltimePerson[], placeholderTarget: string): Promise<void> {
-  const stampsByName = await fetchPersonalStampPngs(people.map(p => p.person_name))
-
-  for (let i = 0; i < people.length; i++) {
-    const stampBuf = stampsByName.get(people[i].person_name)
-    if (!stampBuf) continue
-
-    const slideNum = i + 1
-    const relsFileName = `ppt/slides/_rels/slide${slideNum}.xml.rels`
-    const relsFile = zip.file(relsFileName)
-    if (!relsFile) continue
-    const relsXml = await relsFile.async('string')
-    if (!relsXml.includes(`Target="${placeholderTarget}"`)) continue
-
-    const mediaPath = `ppt/media/stamp_p${slideNum}.png`
-    zip.file(mediaPath, stampBuf)
-
-    // placeholderTarget은 슬라이드 파트 기준 상대경로(예: "../media/image3.png") —
-    // 새 도장 이미지도 같은 media 폴더에 두므로 마지막 파일명만 바꿔치기하면 된다.
-    const newTarget = placeholderTarget.replace(/[^/]+$/, `stamp_p${slideNum}.png`)
-    zip.file(relsFileName, relsXml.replace(`Target="${placeholderTarget}"`, `Target="${newTarget}"`))
-  }
 }
 
 export interface ConsentZipResult {
@@ -170,18 +141,9 @@ export async function buildConsentZip(templateBuf: Buffer, projectId: number, ti
     // 테두리 placeholder 그림이 이름 옆에 들어있는데(실제 파일 손상 아님 — 사람별 실제
     // 도장으로 바꿔 끼우라는 더미 이미지), 그 placeholder 이미지 관계(Target)를 미리
     // 기록해뒀다가, buildMultiSlideDeck으로 복제된 각 사람 슬라이드에서 그 관계의 Target만
-    // NAS에서 받아온 그 사람의 실제 도장 이미지로 바꿔치기합니다(관계 id·슬라이드 XML은
-    // 안 건드림 — rels 파일의 Target 문자열 하나만 바뀌는 것이라 안전하고 간단합니다).
-    const templateSlideFile = Object.keys(zip.files).find(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-    let placeholderImageTarget: string | null = null
-    if (templateSlideFile) {
-      const relsFile = templateSlideFile.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels'
-      const relsXml = await zip.file(relsFile)?.async('string')
-      if (relsXml) {
-        const m = relsXml.match(/<Relationship[^>]*Type="[^"]*\/image"[^>]*Target="([^"]+)"/)
-        if (m) placeholderImageTarget = m[1]
-      }
-    }
+    // NAS에서 받아온 그 사람의 실제 도장 이미지로 바꿔치기합니다(공용 유틸 —
+    // src/lib/pptx-image-swap.ts 참고, 표준재무제표 항목과 로직을 공유합니다).
+    const placeholderImageTarget = await findPlaceholderImageTarget(zip)
 
     await buildMultiSlideDeck(
       zip,
@@ -202,7 +164,9 @@ export async function buildConsentZip(templateBuf: Buffer, projectId: number, ti
     )
 
     if (placeholderImageTarget) {
-      await applyPersonalStamps(zip, people, placeholderImageTarget)
+      const stampsByName = await fetchPersonalStampPngs(people.map(p => p.person_name))
+      const stampImages = people.map(p => stampsByName.get(p.person_name) ?? null)
+      await replaceSlideImages(zip, stampImages, placeholderImageTarget, 'stamp')
     }
 
     return { zip, peopleCount: people.length, projectName: String(project.project_name ?? 'proposal') }

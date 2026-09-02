@@ -1,7 +1,8 @@
 /**
- * [ppt-portal 추가 기능 — 시험 적용] Synology NAS(QuickConnect)에서 인력 개인도장 이미지를
- * 가져오는 클라이언트. 2026-09-02 사용자 확인 — NAS를 "유사 DB" 개념으로 써서, PPT 생성
- * 시점에 필요한 파일(우선 개인도장)을 그때그때 조회해 쓰는 실험적 연동입니다.
+ * [ppt-portal 추가 기능 — 시험 적용] Synology NAS(QuickConnect)에서 PPT 생성에 필요한
+ * 파일(인력 개인도장 이미지, 회사 표준재무제표 pptx)을 가져오는 클라이언트.
+ * 2026-09-02 사용자 확인 — NAS를 "유사 DB" 개념으로 써서, PPT 생성 시점에 필요한 파일을
+ * 그때그때 조회해 쓰는 실험적 연동입니다.
  *
  * 인증 정보(NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD)는 .env로만 관리하고 절대 코드에
  * 하드코딩하지 않습니다 (.env는 .gitignore에 이미 등록되어 커밋되지 않음).
@@ -65,6 +66,50 @@ async function downloadFile(sid: string, path: string): Promise<Buffer | null> {
   const contentType = res.headers.get('content-type') ?? ''
   if (!res.ok || contentType.includes('application/json')) return null
   return Buffer.from(await res.arrayBuffer())
+}
+
+async function listFolder(sid: string, folderPath: string): Promise<{ name: string; isdir: boolean }[]> {
+  const url = new URL(`${NAS_BASE_URL}/webapi/entry.cgi`)
+  url.searchParams.set('api', 'SYNO.FileStation.List')
+  url.searchParams.set('version', '2')
+  url.searchParams.set('method', 'list')
+  url.searchParams.set('folder_path', folderPath)
+  url.searchParams.set('_sid', sid)
+  const res = await fetch(url)
+  const json = (await res.json()) as { success: boolean; data?: { files: { name: string; isdir: boolean }[] } }
+  return json.success && json.data ? json.data.files : []
+}
+
+// 회사 표준재무제표 pptx가 있는 폴더. 파일명에 갱신 날짜가 박혀 있어("표준재무제표(3년)_
+// 260720.pptx") 계속 바뀌므로 파일명을 하드코딩하지 않고, 이 폴더에서 .pptx 확장자인
+// 파일을 찾아 그때그때 사용한다(2026-09-02 확인 — 폴더 안에 연도별 .pdf도 같이 있지만
+// 이미지가 들어있는 3개년 통합본은 .pptx 하나뿐).
+const FINANCIAL_STATEMENT_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/01.회사/18.표준재무제표'
+
+/**
+ * NAS에서 회사 표준재무제표 pptx 원본을 통째로 받아옵니다. 이 문서는 사업과 무관하게
+ * 항상 똑같은 회사 재무제표라, 인력 이름 같은 조회 키가 필요 없습니다.
+ * 못 찾거나 NAS 연동이 실패하면 null (호출 쪽에서 이 첨부 항목만 건너뛰도록 처리).
+ */
+export async function fetchStandardFinancialStatementPptx(): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 표준재무제표 조회를 건너뜁니다.')
+    return null
+  }
+  try {
+    const sid = await login()
+    try {
+      const files = await listFolder(sid, FINANCIAL_STATEMENT_FOLDER)
+      const pptxFile = files.find(f => !f.isdir && /\.pptx$/i.test(f.name))
+      if (!pptxFile) return null
+      return await downloadFile(sid, `${FINANCIAL_STATEMENT_FOLDER}/${pptxFile.name}`)
+    } finally {
+      await logout(sid)
+    }
+  } catch (e) {
+    console.warn('[nas-client] 표준재무제표 조회 실패:', (e as Error).message)
+    return null
+  }
 }
 
 /**

@@ -59,8 +59,8 @@
  *   (openBundleModal은 위 script가 전역에 등록하는 함수이므로, 페이지의 다른
  *   스크립트에서 문자열로 참조만 하면 되고 import는 필요 없습니다.)
  *
- * 항목 구성(BUNDLE_ITEM_DEFS)은 지금 3개(일정표/실적경력/동의서)뿐이지만, 나중에
- * 다른 첨부가 추가될 수 있으므로 배열에 한 줄만 추가하면 되도록 설계했습니다 —
+ * 항목 구성(BUNDLE_ITEM_DEFS)은 지금 4개(일정표/실적경력/동의서/표준재무제표)이지만,
+ * 나중에 다른 첨부가 추가될 수 있으므로 배열에 한 줄만 추가하면 되도록 설계했습니다 —
  * id는 반드시 백엔드 src/routes/ppt-attachment-bundle.ts의 ATTACHMENT_TYPES
  * 레지스트리 key와 같아야 합니다.
  */
@@ -137,15 +137,22 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
 
   // 항목 레지스트리 — 나중에 새 첨부가 추가되면 여기에 한 줄만 추가하면 된다
   // (백엔드 src/routes/ppt-attachment-bundle.ts 의 ATTACHMENT_TYPES 와 id를 맞출 것).
+  // templateLabel: 업로드 드롭존에 표시할 이름. 일정표/실적경력/동의서처럼 그 항목
+  // 전용으로 만든 템플릿은 label을 그대로 쓰고, 표준재무제표처럼 "범용"(placeholder
+  // 이미지 하나만 있으면 되는, 내용과 무관하게 재사용 가능한 구조) 템플릿을 쓰는
+  // 항목은 templateLabel을 "범용 템플릿"으로 따로 지정한다 — 표지/일정표/실적경력/
+  // 동의서를 제외한 대부분의 향후 첨부는 이 "범용" 쪽일 가능성이 높다(2026-09-02
+  // 사용자 확인). label(체크박스·표지 목차에 쓰는 실제 항목명)은 항상 그대로 둔다.
   const BUNDLE_ITEM_DEFS = [
-    { id: 'schedule', label: '감리원 일정 현황표', icon: 'fa-calendar-check' },
-    { id: 'career',   label: '투입 감리원별 실적 및 경력', icon: 'fa-id-card' },
-    { id: 'consent',  label: '비상근 감리원 참여 동의서', icon: 'fa-file-signature' },
+    { id: 'schedule',  label: '감리원 일정 현황표', icon: 'fa-calendar-check' },
+    { id: 'career',    label: '투입 감리원별 실적 및 경력', icon: 'fa-id-card' },
+    { id: 'consent',   label: '비상근 감리원 참여 동의서', icon: 'fa-file-signature' },
+    { id: 'financial', label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿' },
   ]
   // 표지는 체크 대상이 아니라 항상 포함되지만, 템플릿 업로드 슬롯은 항목들과 같은 자리에 둔다.
   const TEMPLATE_SLOTS = [
     { id: 'cover', label: '0. 정성제안서 첨부 표지', icon: 'fa-file-alt', required: true },
-    ...BUNDLE_ITEM_DEFS.map(d => ({ id: d.id, label: d.label, icon: d.icon, required: false })),
+    ...BUNDLE_ITEM_DEFS.map(d => ({ id: d.id, label: d.templateLabel || d.label, icon: d.icon, required: false })),
   ]
 
   const bundleFiles = {} // id('cover'|'schedule'|'career'|'consent') -> File — 페이지에 머무는 동안 유지
@@ -317,7 +324,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     for (const iid of order) {
       if (!bundleFiles[iid]) {
         const def = BUNDLE_ITEM_DEFS.find(d => d.id === iid)
-        alert('"' + def.label + '" 템플릿(.pptx)을 업로드해주세요.')
+        alert('"' + (def.templateLabel || def.label) + '" 템플릿(.pptx)을 업로드해주세요.')
         return
       }
     }
