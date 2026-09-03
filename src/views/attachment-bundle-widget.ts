@@ -38,12 +38,14 @@
  *      파일로 떼어내기만 하면 됩니다.
  *   4) 같이 옮겨야 하는 백엔드 라우트(전부 이번에 새로 추가한 파일들 —
  *      기존 파일을 수정한 곳은 없음):
- *        src/routes/ppt-cover.ts             (0. 정성제안서 첨부 표지)
- *        src/routes/ppt-schedule.ts          (1. 감리원 일정 현황표)
- *        src/routes/ppt-career.ts            (2. 투입 감리원별 실적 및 경력)
- *        src/routes/ppt-consent.ts           (3. 비상근 감리원 참여 동의서)
- *        src/routes/ppt-attachment-bundle.ts (표지+선택 항목을 순서대로 합치는 조립 라우트)
- *        src/lib/pptx-*.ts                   (위 라우트들이 공용으로 쓰는 OOXML 조작 유틸)
+ *        src/routes/ppt-cover.ts                  (0. 정성제안서 첨부 표지)
+ *        src/routes/ppt-schedule.ts               (1. 감리원 일정 현황표)
+ *        src/routes/ppt-career.ts                 (2. 투입 감리원별 실적 및 경력)
+ *        src/routes/ppt-consent.ts                (3. 비상근 감리원 참여 동의서)
+ *        src/routes/ppt-financial-statement.ts    (4. 표준재무제표)
+ *        src/routes/ppt-business-registration.ts  (5. 사업자등록증)
+ *        src/routes/ppt-attachment-bundle.ts      (표지+선택 항목을 순서대로 합치는 조립 라우트)
+ *        src/lib/pptx-*.ts, src/lib/nas-client.ts (위 라우트들이 공용으로 쓰는 유틸)
  *      index.tsx에 import + app.route(...) 한 줄씩만 추가하면 끝입니다
  *      (자세한 건 src/index.tsx의 "[ppt-portal 추가 기능]" 배너 주석 참고).
  *
@@ -59,8 +61,8 @@
  *   (openBundleModal은 위 script가 전역에 등록하는 함수이므로, 페이지의 다른
  *   스크립트에서 문자열로 참조만 하면 되고 import는 필요 없습니다.)
  *
- * 항목 구성(BUNDLE_ITEM_DEFS)은 지금 4개(일정표/실적경력/동의서/표준재무제표)이지만,
- * 나중에 다른 첨부가 추가될 수 있으므로 배열에 한 줄만 추가하면 되도록 설계했습니다 —
+ * 항목 구성(BUNDLE_ITEM_DEFS)은 지금 5개(일정표/실적경력/동의서/표준재무제표/사업자등록증)
+ * 이지만, 나중에 다른 첨부가 추가될 수 있으므로 배열에 한 줄만 추가하면 되도록 설계했습니다 —
  * id는 반드시 백엔드 src/routes/ppt-attachment-bundle.ts의 ATTACHMENT_TYPES
  * 레지스트리 key와 같아야 합니다.
  */
@@ -112,6 +114,21 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
             </p>
             <div id="bundleSchedulePhaseList" class="space-y-1.5 max-h-40 overflow-y-auto text-xs text-slate-600"></div>
           </div>
+
+          <!-- 사업자등록증 선택 시에만 나타나는 도장 종류 선택 -->
+          <div id="bundleBizregStampWrap" class="hidden bg-amber-50 rounded-xl p-3 border border-amber-200">
+            <div class="text-xs font-bold text-amber-700 mb-2">사업자등록증에 찍을 도장 선택</div>
+            <div class="flex gap-4 text-sm text-slate-700">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleBizregStamp" value="원본대조필" class="accent-amber-600" onchange="onBizregStampChange(this.value)">
+                원본대조필
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleBizregStamp" value="사실과상위없음" class="accent-amber-600" onchange="onBizregStampChange(this.value)">
+                사실과상위없음
+              </label>
+            </div>
+          </div>
         </div>
 
         <div class="px-6 py-3 border-t border-slate-100 flex justify-end gap-2 flex-shrink-0">
@@ -147,7 +164,8 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     { id: 'schedule',  label: '감리원 일정 현황표', icon: 'fa-calendar-check' },
     { id: 'career',    label: '투입 감리원별 실적 및 경력', icon: 'fa-id-card' },
     { id: 'consent',   label: '비상근 감리원 참여 동의서', icon: 'fa-file-signature' },
-    { id: 'financial', label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿' },
+    { id: 'financial', label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿(도장X)' },
+    { id: 'bizreg',    label: '사업자등록증', icon: 'fa-id-badge', templateLabel: '범용 템플릿(도장O)' },
   ]
   // 표지는 체크 대상이 아니라 항상 포함되지만, 템플릿 업로드 슬롯은 항목들과 같은 자리에 둔다.
   const TEMPLATE_SLOTS = [
@@ -156,28 +174,30 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   ]
 
   // 1.일정표/2.실적경력/3.동의서는 거의 항상 같이 나가는 "기본 3종"이라, 첨부PPT 생성
-  // 버튼을 누를 때마다 항상 체크된 채로 맨 앞 순서 고정으로 시작한다(2026-09-02 사용자
-  // 확인). 그 외 항목(표준재무제표 등, 앞으로 늘어날 "범용" 항목들)은 매번 체크 해제
-  // 상태로 그 뒤에 붙고, 서로간에는 자유롭게 드래그로 순서를 바꿀 수 있다 — 기본 3종
-  // 앞으로는 절대 끼어들 수 없다(resetBundleSelection/렌더링에서 기본 3종은 draggable을
-  // 아예 안 붙여서 드래그 시작 자체가 안 되고, dragover도 기본 3종 위에서는 무시한다).
+  // 버튼을 누를 때마다 항상 체크된 채로 맨 앞 순서로 시작한다(2026-09-02 사용자 확인 —
+  // "고정"은 시작 상태 얘기일 뿐, 드래그로 다시 옮기는 건 자유롭게 가능해야 함). 그 외
+  // 항목(표준재무제표 등, 앞으로 늘어날 "범용" 항목들)은 매번 체크 해제 상태로 그 뒤에
+  // 붙는다. 전부 똑같이 드래그로 순서를 바꿀 수 있고 잠긴 항목은 없다.
   const CORE_IDS = ['schedule', 'career', 'consent']
 
   const bundleFiles = {} // id('cover'|'schedule'|'career'|'consent'|...) -> File — 페이지에 머무는 동안 유지
   const bundleItemChecked = {} // id -> boolean
-  let bundleItemOrder = [] // 드래그로 바뀌는 현재 순서 (모달 열 때마다 resetBundleSelection이 채움)
+  let bundleItemOrder = [] // 드래그로 바뀌는 현재 순서 (모달 열 때마다 resetBundleSelection이 기본값으로 채움)
 
   let bundleProjectId = null
   let bundleBtnEl = null
   let bundleDragId = null
+  let bundleBizregStampType = null // '원본대조필' | '사실과상위없음' | null — 사업자등록증 체크 시 선택
 
-  /** 첨부PPT 생성 모달을 열 때마다 호출 — 기본 3종은 체크+맨 앞 고정, 나머지는 체크 해제
-   *  상태로 그 뒤에 배치한다. 업로드해둔 템플릿 파일(bundleFiles)은 그대로 유지한다. */
+  /** 첨부PPT 생성 모달을 열 때마다 호출 — 기본 3종은 체크된 채로 맨 앞 순서, 나머지는
+   *  체크 해제 상태로 그 뒤에 배치한 "시작 상태"로 되돌린다(이후 드래그/체크는 자유).
+   *  업로드해둔 템플릿 파일(bundleFiles)은 그대로 유지한다. */
   function resetBundleSelection() {
     const extraIds = BUNDLE_ITEM_DEFS.map(d => d.id).filter(id => !CORE_IDS.includes(id))
     bundleItemOrder = [...CORE_IDS, ...extraIds]
     CORE_IDS.forEach(id => { bundleItemChecked[id] = true })
     extraIds.forEach(id => { bundleItemChecked[id] = false })
+    bundleBizregStampType = null
   }
 
   // ── 템플릿 업로드 슬롯 (클릭 또는 드래그앤드롭) ────────────────────
@@ -233,20 +253,14 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       const def = BUNDLE_ITEM_DEFS.find(d => d.id === id)
       const checked = bundleItemChecked[id]
       const hasFile = !!bundleFiles[id]
-      const locked = CORE_IDS.includes(id)
-      // 기본 3종(locked)은 draggable 자체를 안 붙여서 드래그 시작이 안 되고, dragover도
-      // 안 걸어서 다른 항목이 그 위/사이로 끼어들 수 없다 — 항상 맨 앞 고정.
-      const dragAttrs = locked
-        ? ''
-        : \`draggable="true" ondragstart="bundleDragStart(event,'\${id}')" ondragover="bundleDragOver(event,'\${id}')" ondragend="bundleDragEnd(event)"\`
-      const handleIcon = locked
-        ? '<i class="fas fa-lock text-slate-300 text-xs" title="항상 포함되는 기본 항목 — 순서 고정"></i>'
-        : '<i class="fas fa-grip-vertical text-slate-300 cursor-grab" title="드래그해서 순서 변경"></i>'
       return \`
         <div class="border rounded-xl px-3 py-2.5 flex items-center gap-2 transition
                     \${checked ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-white'}"
-             data-bundle-id="\${id}" \${dragAttrs}>
-          \${handleIcon}
+             draggable="true" data-bundle-id="\${id}"
+             ondragstart="bundleDragStart(event,'\${id}')"
+             ondragover="bundleDragOver(event,'\${id}')"
+             ondragend="bundleDragEnd(event)">
+          <i class="fas fa-grip-vertical text-slate-300 cursor-grab" title="드래그해서 순서 변경"></i>
           <input type="checkbox" class="w-4 h-4 accent-indigo-600" \${checked ? 'checked' : ''}
                  onchange="toggleBundleItem('\${id}', this.checked)">
           <i class="fas \${def.icon} text-indigo-400 text-xs"></i>
@@ -265,6 +279,19 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       if (checked) loadBundleSchedulePhases()
       else document.getElementById('bundleSchedulePhaseWrap').classList.add('hidden')
     }
+    if (id === 'bizreg') {
+      if (checked) {
+        document.getElementById('bundleBizregStampWrap').classList.remove('hidden')
+      } else {
+        document.getElementById('bundleBizregStampWrap').classList.add('hidden')
+        bundleBizregStampType = null
+        document.querySelectorAll('input[name="bundleBizregStamp"]').forEach(el => { el.checked = false })
+      }
+    }
+  }
+
+  function onBizregStampChange(value) {
+    bundleBizregStampType = value
   }
 
   // 드래그 중에도 실시간으로 순서가 바뀌어 보이도록, drop을 기다리지 않고
@@ -325,6 +352,8 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     renderBundleList()
     document.getElementById('bundleSchedulePhaseWrap').classList.add('hidden')
     if (bundleItemChecked['schedule']) loadBundleSchedulePhases()
+    document.getElementById('bundleBizregStampWrap').classList.add('hidden')
+    document.querySelectorAll('input[name="bundleBizregStamp"]').forEach(el => { el.checked = false })
   }
 
   function closeBundleModal() {
@@ -354,6 +383,10 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     const additionalPhaseIds = order.includes('schedule')
       ? [...document.querySelectorAll('.bundle-schedule-phase-checkbox:checked')].map(el => Number(el.value))
       : []
+    if (order.includes('bizreg') && !bundleBizregStampType) {
+      alert('사업자등록증에 찍을 도장(원본대조필/사실과상위없음)을 선택해주세요.')
+      return
+    }
 
     closeBundleModal()
     const originalHtml = btnEl.innerHTML
@@ -364,6 +397,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       fd.append('cover', bundleFiles['cover'])
       fd.append('order', JSON.stringify(order))
       fd.append('additionalPhaseIds', JSON.stringify(additionalPhaseIds))
+      if (order.includes('bizreg')) fd.append('stampType', bundleBizregStampType)
       order.forEach(iid => fd.append(iid, bundleFiles[iid]))
       const r = await fetch('/api/ppt-attachment-bundle/' + id, { method: 'POST', body: fd })
       if (!r.ok) {

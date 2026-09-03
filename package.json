@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.tsx",
+    "dev": "tsx watch --env-file=.env src/index.tsx",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.build.json && cp -r public/static dist/",
     "db:migrate": "node dist/db/migrate.js"

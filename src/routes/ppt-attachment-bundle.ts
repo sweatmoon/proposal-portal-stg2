@@ -18,6 +18,9 @@
  *     src/routes/ppt-consent.ts                3. 비상근 감리원 참여 동의서
  *     src/routes/ppt-financial-statement.ts    4. 표준재무제표 (NAS의 회사 표준재무제표 원본을
  *                                               페이지별 이미지로 뽑아 범용 템플릿에 붙여넣음)
+ *     src/routes/ppt-business-registration.ts  5. 사업자등록증 (전용 템플릿 — 슬라이드 1장에
+ *                                               큰 자리=NAS 사업자등록증 스캔본, 작은 자리=
+ *                                               사용자가 고른 도장(원본대조필/사실과상위없음))
  *   공용 OOXML 조립 유틸 (위 라우트들이 나눠서 사용)
  *     src/lib/pptx-runtext.ts                  [placeholder] 텍스트 치환 (런 분산 대응)
  *     src/lib/pptx-table-rows.ts               일정표류 표 동적 확장(rowSpan/vMerge, 페이지 분할)
@@ -69,6 +72,8 @@ import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
 import { buildFinancialStatementZip } from './ppt-financial-statement.js'
+import { buildBusinessRegistrationZip } from './ppt-business-registration.js'
+import type { CompanyStampType } from '../lib/nas-client.js'
 import { buildCoverZip } from './ppt-cover.js'
 import { mergeDecksSharingMaster } from '../lib/pptx-merge.js'
 
@@ -105,6 +110,17 @@ const ATTACHMENT_TYPES: Record<
   financial: {
     label: '표준재무제표',
     build: async (buf, projectId, _form, titlePrefix) => (await buildFinancialStatementZip(buf, projectId, titlePrefix)).zip,
+  },
+  bizreg: {
+    label: '사업자등록증',
+    build: async (buf, projectId, form, titlePrefix) => {
+      const stampType = form.get('stampType')
+      if (stampType !== '원본대조필' && stampType !== '사실과상위없음') {
+        throw new Error('사업자등록증 도장 종류(원본대조필/사실과상위없음)를 선택해주세요')
+      }
+      const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType as CompanyStampType, titlePrefix)
+      return zip
+    },
   },
 }
 
