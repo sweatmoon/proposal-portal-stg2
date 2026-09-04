@@ -223,6 +223,26 @@ export async function fetchInsuranceEnrollmentPdf(): Promise<Buffer | null> {
   return fetchLatestPdfFromFolder(INSURANCE_ENROLLMENT_FOLDER, '4대보험 가입확인서')
 }
 
+// 재직증명서 발행용 직원정보가 들어있는 엑셀(매크로 포함, .xlsm) — 다른 항목과 달리 파일명이
+// 고정돼있고 폴더가 아니라 파일 경로 자체가 확정적이다(2026-09-04 사용자 확인 — 이 파일이
+// 최근 이 참조용 폴더에 새로 올라와서 웹에서도 접근 가능해짐). "직원정보" 시트의 내용을
+// src/lib/xlsx-employee-lookup.ts에서 파싱해서 쓴다 — 엑셀 프로그램이나 매크로는 전혀
+// 실행하지 않고, 그 안의 값만 데이터로 읽어온다.
+const EMPLOYMENT_CERT_SOURCE_FILE = '/activo/04.제안팀/99.악티보포털참조용/00.재직증명서발행파일v4.xlsm'
+
+/** NAS에서 재직증명서 발행용 엑셀(.xlsm) 원본을 통째로 받아옵니다. 못 찾으면 null. */
+export async function fetchEmploymentCertificateSourceXlsx(): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 재직증명서 발행파일 조회를 건너뜁니다.')
+    return null
+  }
+  return withNasRetry('재직증명서 발행파일 조회', async sid => {
+    const buf = await downloadFile(sid, EMPLOYMENT_CERT_SOURCE_FILE)
+    if (!buf) throw new Error('다운로드 실패: ' + EMPLOYMENT_CERT_SOURCE_FILE)
+    return buf
+  })
+}
+
 // "원본대조필"/"사실과상위없음" 도장 이미지가 있는 폴더 — 같은 도장이 배경 제거 버전으로
 // 여러 장(_1~_5) 들어있는데, 어느 걸 골라도 상관없어서(2026-09-03 사용자 확인: "아무거나")
 // 이름순으로 첫 번째 것만 쓴다.

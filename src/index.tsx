@@ -32,6 +32,7 @@ import pptTaxCertificateApiRoute from './routes/ppt-tax-certificate.js'
 import pptLocalTaxCertificateApiRoute from './routes/ppt-local-tax-certificate.js'
 import pptCorporateRegistryApiRoute from './routes/ppt-corporate-registry.js'
 import pptInsuranceEnrollmentApiRoute from './routes/ppt-insurance-enrollment.js'
+import pptEmploymentCertificateApiRoute from './routes/ppt-employment-certificate.js'
 import pptCoverApiRoute from './routes/ppt-cover.js'
 import pptAttachmentBundleApiRoute from './routes/ppt-attachment-bundle.js'
 
@@ -67,6 +68,7 @@ app.route('/api/ppt-tax-certificate',      pptTaxCertificateApiRoute)
 app.route('/api/ppt-local-tax-certificate',pptLocalTaxCertificateApiRoute)
 app.route('/api/ppt-corporate-registry',   pptCorporateRegistryApiRoute)
 app.route('/api/ppt-insurance-enrollment', pptInsuranceEnrollmentApiRoute)
+app.route('/api/ppt-employment-certificate',pptEmploymentCertificateApiRoute)
 app.route('/api/ppt-cover',                pptCoverApiRoute)
 app.route('/api/ppt-attachment-bundle',    pptAttachmentBundleApiRoute)
 

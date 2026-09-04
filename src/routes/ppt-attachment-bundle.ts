@@ -82,6 +82,7 @@ import { buildTaxCertificateZip } from './ppt-tax-certificate.js'
 import { buildLocalTaxCertificateZip } from './ppt-local-tax-certificate.js'
 import { buildCorporateRegistryZip } from './ppt-corporate-registry.js'
 import { buildInsuranceEnrollmentZip } from './ppt-insurance-enrollment.js'
+import { buildEmploymentCertificateZip } from './ppt-employment-certificate.js'
 import type { CompanyStampType } from '../lib/nas-client.js'
 import { buildCoverZip } from './ppt-cover.js'
 import { mergeDecksSharingMaster } from '../lib/pptx-merge.js'
@@ -173,6 +174,10 @@ const ATTACHMENT_TYPES: Record<
       const { zip } = await buildInsuranceEnrollmentZip(buf, projectId, stampType, titlePrefix)
       return zip
     },
+  },
+  employmentCert: {
+    label: '재직증명서',
+    build: async (buf, projectId, _form, titlePrefix) => (await buildEmploymentCertificateZip(buf, projectId, titlePrefix)).zip,
   },
 }
 

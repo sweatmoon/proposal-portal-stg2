@@ -219,6 +219,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     { id: 'localtaxcert',  label: '지방세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
     { id: 'corpregistry',  label: '법인등기부등본', icon: 'fa-building', templateGroup: 'stamped' },
     { id: 'insurance',     label: '4대보험 가입확인서', icon: 'fa-notes-medical', templateGroup: 'stamped' },
+    { id: 'employmentCert', label: '재직증명서', icon: 'fa-file-contract' },
   ]
   // templateGroup으로 묶이는 항목들이 공유하는 템플릿 업로드 슬롯 정의.
   const TEMPLATE_GROUPS = [
