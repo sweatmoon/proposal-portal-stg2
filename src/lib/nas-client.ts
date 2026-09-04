@@ -214,6 +214,15 @@ export async function fetchCorporateRegistryPdf(includeCancelled: boolean): Prom
   return fetchLatestPdfFromFolder(CORPORATE_REGISTRY_FOLDER, '법인등기부등본', predicate)
 }
 
+// 4대보험 가입확인서(4대 사회보험 사업장 가입자명부) .pdf가 있는 폴더 — 지방세 납세증명서와
+// 같은 이유로 파일이름 기준 가장 최신 것을 그때그때 골라 쓴다(2026-09-04 사용자 확인).
+const INSURANCE_ENROLLMENT_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/01.회사/14.4대 사회보험 사업장 가입자명부'
+
+/** NAS에서 4대보험 가입확인서 중 파일이름 기준 가장 최신 .pdf를 받아옵니다. 못 찾으면 null. */
+export async function fetchInsuranceEnrollmentPdf(): Promise<Buffer | null> {
+  return fetchLatestPdfFromFolder(INSURANCE_ENROLLMENT_FOLDER, '4대보험 가입확인서')
+}
+
 // "원본대조필"/"사실과상위없음" 도장 이미지가 있는 폴더 — 같은 도장이 배경 제거 버전으로
 // 여러 장(_1~_5) 들어있는데, 어느 걸 골라도 상관없어서(2026-09-03 사용자 확인: "아무거나")
 // 이름순으로 첫 번째 것만 쓴다.

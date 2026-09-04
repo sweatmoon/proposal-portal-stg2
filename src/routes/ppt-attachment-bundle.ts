@@ -81,6 +81,7 @@ import { buildBusinessRegistrationZip } from './ppt-business-registration.js'
 import { buildTaxCertificateZip } from './ppt-tax-certificate.js'
 import { buildLocalTaxCertificateZip } from './ppt-local-tax-certificate.js'
 import { buildCorporateRegistryZip } from './ppt-corporate-registry.js'
+import { buildInsuranceEnrollmentZip } from './ppt-insurance-enrollment.js'
 import type { CompanyStampType } from '../lib/nas-client.js'
 import { buildCoverZip } from './ppt-cover.js'
 import { mergeDecksSharingMaster } from '../lib/pptx-merge.js'
@@ -162,6 +163,14 @@ const ATTACHMENT_TYPES: Record<
         throw new Error('법인등기부등본 말소사항 포함 여부를 선택해주세요')
       }
       const { zip } = await buildCorporateRegistryZip(buf, projectId, includeCancelledRaw === 'true', stampType, titlePrefix)
+      return zip
+    },
+  },
+  insurance: {
+    label: '4대보험 가입확인서',
+    build: async (buf, projectId, form, titlePrefix) => {
+      const stampType = validateStampType(form)
+      const { zip } = await buildInsuranceEnrollmentZip(buf, projectId, stampType, titlePrefix)
       return zip
     },
   },

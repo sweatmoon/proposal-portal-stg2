@@ -218,6 +218,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     { id: 'taxcert',       label: '국세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
     { id: 'localtaxcert',  label: '지방세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
     { id: 'corpregistry',  label: '법인등기부등본', icon: 'fa-building', templateGroup: 'stamped' },
+    { id: 'insurance',     label: '4대보험 가입확인서', icon: 'fa-notes-medical', templateGroup: 'stamped' },
   ]
   // templateGroup으로 묶이는 항목들이 공유하는 템플릿 업로드 슬롯 정의.
   const TEMPLATE_GROUPS = [
@@ -248,7 +249,11 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   const CORE_IDS = ['schedule', 'career', 'consent']
   // "범용 템플릿(도장O)"를 공유하는 항목들 — 하나라도 체크되면 도장 선택 UI가 뜨고,
   // 전부 체크 해제되면 사라진다(2026-09-03 사용자 확인 — 도장 선택은 "딱 한 번만").
-  const STAMP_GROUP_IDS = ['bizreg', 'taxcert', 'localtaxcert', 'corpregistry']
+  // templateGroup === 'stamped'인 항목을 자동으로 모아서 만든다 — 예전엔 이 배열을
+  // 하드코딩해서, 새 도장O 항목을 추가할 때 여기 등록을 깜빡하면 도장 선택 UI가 안 뜨고
+  // 검증도 건너뛰어 생성 버튼을 눌러도 모달이 닫힌 채로 서버에서만 실패하는 버그가 있었다
+  // (2026-09-04 실측 — 4대보험 가입확인서 추가 시 실제로 이 배열에 등록을 빠뜨렸었음).
+  const STAMP_GROUP_IDS = BUNDLE_ITEM_DEFS.filter(d => d.templateGroup === 'stamped').map(d => d.id)
 
   const bundleFiles = {} // id('cover'|'schedule'|'career'|'consent'|...) -> File — 페이지에 머무는 동안 유지
   const bundleItemChecked = {} // id -> boolean
