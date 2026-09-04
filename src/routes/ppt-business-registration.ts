@@ -26,10 +26,10 @@
  *     - stampType: "원본대조필" | "사실과상위없음"
  */
 import { Hono } from 'hono'
-import JSZip from 'jszip'
+import type JSZip from 'jszip'
 import { queryOne } from '../db/client.js'
-import { applyPlaceholderMap } from '../lib/pptx-runtext.js'
-import { findPicPlaceholdersBySize, replaceOnePlaceholder } from '../lib/pptx-image-swap.js'
+import { extractAllImagesFromPptx } from '../lib/pptx-image-swap.js'
+import { buildStampedDeckZip } from '../lib/pptx-stamped-doc.js'
 import { fetchBusinessRegistrationPptx, fetchCompanyStampPng, type CompanyStampType } from '../lib/nas-client.js'
 
 const app = new Hono()
@@ -40,22 +40,6 @@ const STAMP_TYPES: CompanyStampType[] = ['원본대조필', '사실과상위없�
 export interface BusinessRegistrationZipResult {
   zip: JSZip
   projectName: string
-}
-
-/** NAS에서 받아온 사업자등록증 pptx의 첫 슬라이드 첫 이미지를 뽑아낸다(1슬라이드=1장짜리
- *  스캔본이라 여러 장 처리할 필요가 없음). */
-async function extractFirstImage(sourcePptx: Buffer): Promise<Buffer | null> {
-  const zip = await JSZip.loadAsync(sourcePptx)
-  const slideFile = Object.keys(zip.files).find(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-  if (!slideFile) return null
-  const relsFile = slideFile.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels'
-  const relsXml = await zip.file(relsFile)?.async('string')
-  if (!relsXml) return null
-  const m = relsXml.match(/<Relationship[^>]*Type="[^"]*\/image"[^>]*Target="([^"]+)"/)
-  if (!m) return null
-  const mediaPath = 'ppt/' + m[1].replace(/^(\.\.\/)+/, '')
-  const mediaFile = zip.file(mediaPath)
-  return mediaFile ? await mediaFile.async('nodebuffer') : null
 }
 
 /** 이 파일의 핵심 로직 — 단독 다운로드 라우트와 첨부 묶음 라우트 양쪽에서 호출한다.
@@ -79,42 +63,15 @@ export async function buildBusinessRegistrationZip(
   ])
   if (!bizregSourcePptx) throw new Error('NAS에서 사업자등록증 원본 파일을 가져오지 못했습니다')
 
-  const bigImage = await extractFirstImage(bizregSourcePptx)
-  if (!bigImage) throw new Error('사업자등록증 원본 파일에서 이미지를 찾지 못했습니다')
+  const bigImages = await extractAllImagesFromPptx(bizregSourcePptx)
+  if (!bigImages.length) throw new Error('사업자등록증 원본 파일에서 이미지를 찾지 못했습니다')
 
   const commonMap: Record<string, string> = {
     '[제목]': `${titlePrefix}${PAGE_TITLE}`,
     '[감리사업명]': project.project_name,
   }
 
-  const zip = await JSZip.loadAsync(templateBuf)
-
-  const sharedPartNames = Object.keys(zip.files).filter(
-    f => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(f) || /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(f)
-  )
-  for (const partName of sharedPartNames) {
-    const partXml = await zip.file(partName)!.async('string')
-    const patched = applyPlaceholderMap(partXml, commonMap)
-    if (patched !== partXml) zip.file(partName, patched)
-  }
-
-  const slideFile = Object.keys(zip.files).find(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-  if (!slideFile) throw new Error('템플릿에 슬라이드가 없습니다')
-
-  const slideXml = await zip.file(slideFile)!.async('string')
-  const patchedSlideXml = applyPlaceholderMap(slideXml, commonMap)
-  if (patchedSlideXml !== slideXml) zip.file(slideFile, patchedSlideXml)
-
-  const placeholders = await findPicPlaceholdersBySize(zip, slideFile)
-  if (placeholders.length < 2) {
-    throw new Error('템플릿에서 이미지 자리를 2개(큰 자리+작은 자리) 찾지 못했습니다')
-  }
-  const [bigTarget, smallTarget] = [placeholders[0].target, placeholders[placeholders.length - 1].target]
-
-  await replaceOnePlaceholder(zip, slideFile, bigTarget, bigImage, 'bizreg_big.png')
-  if (stampPng) {
-    await replaceOnePlaceholder(zip, slideFile, smallTarget, stampPng, 'bizreg_stamp.png')
-  }
+  const zip = await buildStampedDeckZip(templateBuf, commonMap, bigImages, stampPng, 'bizreg')
 
   return { zip, projectName: project.project_name }
 }

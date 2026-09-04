@@ -28,6 +28,9 @@ import pptScheduleApiRoute from './routes/ppt-schedule.js'
 import pptCareerApiRoute from './routes/ppt-career.js'
 import pptFinancialStatementApiRoute from './routes/ppt-financial-statement.js'
 import pptBusinessRegistrationApiRoute from './routes/ppt-business-registration.js'
+import pptTaxCertificateApiRoute from './routes/ppt-tax-certificate.js'
+import pptLocalTaxCertificateApiRoute from './routes/ppt-local-tax-certificate.js'
+import pptCorporateRegistryApiRoute from './routes/ppt-corporate-registry.js'
 import pptCoverApiRoute from './routes/ppt-cover.js'
 import pptAttachmentBundleApiRoute from './routes/ppt-attachment-bundle.js'
 
@@ -59,6 +62,9 @@ app.route('/api/ppt-schedule',             pptScheduleApiRoute)
 app.route('/api/ppt-career',               pptCareerApiRoute)
 app.route('/api/ppt-financial-statement',  pptFinancialStatementApiRoute)
 app.route('/api/ppt-business-registration',pptBusinessRegistrationApiRoute)
+app.route('/api/ppt-tax-certificate',      pptTaxCertificateApiRoute)
+app.route('/api/ppt-local-tax-certificate',pptLocalTaxCertificateApiRoute)
+app.route('/api/ppt-corporate-registry',   pptCorporateRegistryApiRoute)
 app.route('/api/ppt-cover',                pptCoverApiRoute)
 app.route('/api/ppt-attachment-bundle',    pptAttachmentBundleApiRoute)
 

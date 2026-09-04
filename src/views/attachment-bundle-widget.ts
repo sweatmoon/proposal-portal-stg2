@@ -44,6 +44,9 @@
  *        src/routes/ppt-consent.ts                (3. 비상근 감리원 참여 동의서)
  *        src/routes/ppt-financial-statement.ts    (4. 표준재무제표)
  *        src/routes/ppt-business-registration.ts  (5. 사업자등록증)
+ *        src/routes/ppt-tax-certificate.ts        (6. 국세 납세증명서)
+ *        src/routes/ppt-local-tax-certificate.ts  (7. 지방세 납세증명서)
+ *        src/routes/ppt-corporate-registry.ts     (8. 법인등기부등본)
  *        src/routes/ppt-attachment-bundle.ts      (표지+선택 항목을 순서대로 합치는 조립 라우트)
  *        src/lib/pptx-*.ts, src/lib/nas-client.ts (위 라우트들이 공용으로 쓰는 유틸)
  *      index.tsx에 import + app.route(...) 한 줄씩만 추가하면 끝입니다
@@ -92,8 +95,8 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     </div>
 
     <!-- 첨부PPT 생성 모달: 체크/드래그 가능한 항목 목록 (템플릿 파일은 위쪽에서 업로드) -->
-    <div id="bundleModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+    <div id="bundleModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 gap-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg h-[640px] flex flex-col">
         <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
           <div>
             <h3 class="font-bold text-slate-800"><i class="fas fa-paperclip mr-2 text-indigo-500"></i>첨부PPT 생성</h3>
@@ -102,9 +105,22 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
           <button onclick="closeBundleModal()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
         </div>
 
-        <div class="px-6 py-4 overflow-y-auto space-y-4">
-          <!-- 항목 목록 (체크 + 실시간 드래그 재정렬) -->
-          <div id="bundleItemList" class="space-y-2"></div>
+        <!-- flex-1 min-h-0 + overflow-y-auto: 단계별 선택/도장 선택 칸이 나타나거나 사라져도
+             모달 전체 크기는 고정된 채 이 영역만 내부 스크롤되게 한다(2026-09-04 사용자 확인 —
+             "체크가 있든 없든 똑같은 크기를 유지... 계속 크기가 바뀌니까 헷갈림"). -->
+        <div class="px-6 py-4 overflow-y-auto space-y-4 flex-1 min-h-0">
+          <!-- 항목 목록 (체크 + 실시간 드래그 재정렬). 기본 3종(일정표/실적경력/동의서) 외의
+               항목은 여기 바로 안 보이고 "추가서류" 패널에서 드래그해 넣어야 나타난다
+               (2026-09-04 사용자 확인 — 첨부 종류가 계속 늘어날 걸 대비한 UX). -->
+          <div id="bundleItemList" class="space-y-2"
+               ondragover="event.preventDefault()" ondrop="bundleListDrop(event)"></div>
+
+          <!-- 추가서류 패널 열기/닫기 토글 -->
+          <button type="button" onclick="toggleExtraPanel()"
+                  class="w-full text-xs font-semibold text-indigo-600 border border-dashed border-indigo-300 rounded-lg py-2 hover:bg-indigo-50 flex items-center justify-center gap-1.5">
+            <i class="fas fa-layer-group"></i> 추가서류
+            <i id="bundleExtraToggleIcon" class="fas fa-chevron-right text-[10px]"></i>
+          </button>
 
           <!-- 일정표 선택 시에만 나타나는 단계별 추가/정기 선택 -->
           <div id="bundleSchedulePhaseWrap" class="hidden bg-indigo-50 rounded-xl p-3 border border-indigo-200">
@@ -115,17 +131,34 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
             <div id="bundleSchedulePhaseList" class="space-y-1.5 max-h-40 overflow-y-auto text-xs text-slate-600"></div>
           </div>
 
-          <!-- 사업자등록증 선택 시에만 나타나는 도장 종류 선택 -->
-          <div id="bundleBizregStampWrap" class="hidden bg-amber-50 rounded-xl p-3 border border-amber-200">
-            <div class="text-xs font-bold text-amber-700 mb-2">사업자등록증에 찍을 도장 선택</div>
+          <!-- 사업자등록증/국세·지방세 납세증명서/법인등기부등본 중 하나라도 선택 시 나타나는
+               도장 종류 선택 — 이 항목들은 전부 "범용 템플릿(도장O)"를 공유하므로 도장도
+               한 번만 골라서 전체에 일괄 적용한다(2026-09-03 사용자 확인). -->
+          <div id="bundleStampWrap" class="hidden bg-amber-50 rounded-xl p-3 border border-amber-200">
+            <div class="text-xs font-bold text-amber-700 mb-2">찍을 도장 선택 (사업자등록증·납세증명서·법인등기부등본에 공통 적용)</div>
             <div class="flex gap-4 text-sm text-slate-700">
               <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="bundleBizregStamp" value="원본대조필" class="accent-amber-600" onchange="onBizregStampChange(this.value)">
+                <input type="radio" name="bundleStamp" value="원본대조필" class="accent-amber-600" onchange="onStampChange(this.value)">
                 원본대조필
               </label>
               <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="bundleBizregStamp" value="사실과상위없음" class="accent-amber-600" onchange="onBizregStampChange(this.value)">
+                <input type="radio" name="bundleStamp" value="사실과상위없음" class="accent-amber-600" onchange="onStampChange(this.value)">
                 사실과상위없음
+              </label>
+            </div>
+          </div>
+
+          <!-- 법인등기부등본 선택 시에만 나타나는 말소사항 포함 여부 선택 -->
+          <div id="bundleCorpRegistryWrap" class="hidden bg-sky-50 rounded-xl p-3 border border-sky-200">
+            <div class="text-xs font-bold text-sky-700 mb-2">법인등기부등본 말소사항 포함 여부</div>
+            <div class="flex gap-4 text-sm text-slate-700">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleCorpRegistryCancelled" value="true" class="accent-sky-600" onchange="onCorpRegistryCancelledChange(this.value)">
+                말소사항포함
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleCorpRegistryCancelled" value="false" class="accent-sky-600" onchange="onCorpRegistryCancelledChange(this.value)">
+                말소사항미포함
               </label>
             </div>
           </div>
@@ -135,6 +168,22 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
           <button onclick="closeBundleModal()" class="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">취소</button>
           <button onclick="confirmGenerateBundle()" id="bundleConfirmBtn" class="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">생성</button>
         </div>
+      </div>
+
+      <!-- 추가서류 패널 — "추가서류" 버튼을 누르면 본 모달 오른쪽에 나타난다. 여기 카드를
+           왼쪽 항목 목록으로 드래그하면 그 항목이 목록에 추가되고 자동으로 체크되며,
+           반대로 왼쪽 목록의 항목을 이 패널로 드래그하면 목록에서 빠진다(2026-09-04
+           사용자 확인 — "왼쪽에서 오른쪽으로도 드래그가 되게"). 크기는 왼쪽 모달과
+           맞춰 큼지막한 고정 크기로 두고(항목 수에 따라 커지거나 작아지지 않음),
+           카드는 가나다순으로 정렬한다. -->
+      <div id="bundleExtraPanel" class="hidden bg-white rounded-2xl shadow-xl w-96 h-[640px] flex flex-col"
+           ondragover="event.preventDefault()" ondrop="bundleExtraPanelDrop(event)">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <h4 class="font-bold text-slate-700 text-sm"><i class="fas fa-layer-group mr-1.5 text-indigo-400"></i>추가서류</h4>
+          <button onclick="toggleExtraPanel()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
+        </div>
+        <p class="px-4 pt-3 text-xs text-slate-400 flex-shrink-0">왼쪽 목록과 이 패널 사이로 서로 드래그해서 넣고 뺄 수 있습니다.</p>
+        <div id="bundleExtraList" class="p-3 space-y-2 overflow-y-auto flex-1 min-h-0"></div>
       </div>
     </div>
     <!-- ▲▲▲ [ppt-portal 추가 기능] 첨부PPT 위젯 HTML 끝 ▲▲▲ -->
@@ -154,23 +203,41 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
 
   // 항목 레지스트리 — 나중에 새 첨부가 추가되면 여기에 한 줄만 추가하면 된다
   // (백엔드 src/routes/ppt-attachment-bundle.ts 의 ATTACHMENT_TYPES 와 id를 맞출 것).
-  // templateLabel: 업로드 드롭존에 표시할 이름. 일정표/실적경력/동의서처럼 그 항목
-  // 전용으로 만든 템플릿은 label을 그대로 쓰고, 표준재무제표처럼 "범용"(placeholder
-  // 이미지 하나만 있으면 되는, 내용과 무관하게 재사용 가능한 구조) 템플릿을 쓰는
-  // 항목은 templateLabel을 "범용 템플릿"으로 따로 지정한다 — 표지/일정표/실적경력/
-  // 동의서를 제외한 대부분의 향후 첨부는 이 "범용" 쪽일 가능성이 높다(2026-09-02
-  // 사용자 확인). label(체크박스·표지 목차에 쓰는 실제 항목명)은 항상 그대로 둔다.
+  // templateLabel: 업로드 드롭존에 표시할 이름(그 항목 전용 템플릿일 때만). templateGroup:
+  // 여러 항목이 "완전히 같은 템플릿 파일 하나"를 공유할 때 쓰는 묶음 키 — 사업자등록증/
+  // 국세·지방세 납세증명서/법인등기부등본은 전부 "범용 템플릿(도장O)" 한 장만 올리면
+  // 되므로(2026-09-03 사용자 확인 — "전부 범용(도장o) 쓸 거임") 같은 templateGroup을
+  // 준다. templateGroup이 있으면 templateLabel은 무시되고 TEMPLATE_GROUPS의 label을 쓴다.
+  // label(체크박스·표지 목차에 쓰는 실제 항목명)은 항상 항목별로 따로 둔다.
   const BUNDLE_ITEM_DEFS = [
-    { id: 'schedule',  label: '감리원 일정 현황표', icon: 'fa-calendar-check' },
-    { id: 'career',    label: '투입 감리원별 실적 및 경력', icon: 'fa-id-card' },
-    { id: 'consent',   label: '비상근 감리원 참여 동의서', icon: 'fa-file-signature' },
-    { id: 'financial', label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿(도장X)' },
-    { id: 'bizreg',    label: '사업자등록증', icon: 'fa-id-badge', templateLabel: '범용 템플릿(도장O)' },
+    { id: 'schedule',      label: '감리원 일정 현황표', icon: 'fa-calendar-check' },
+    { id: 'career',        label: '투입 감리원별 실적 및 경력', icon: 'fa-id-card' },
+    { id: 'consent',       label: '비상근 감리원 참여 동의서', icon: 'fa-file-signature' },
+    { id: 'financial',     label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿(도장X)' },
+    { id: 'bizreg',        label: '사업자등록증', icon: 'fa-id-badge', templateGroup: 'stamped' },
+    { id: 'taxcert',       label: '국세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
+    { id: 'localtaxcert',  label: '지방세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
+    { id: 'corpregistry',  label: '법인등기부등본', icon: 'fa-building', templateGroup: 'stamped' },
   ]
+  // templateGroup으로 묶이는 항목들이 공유하는 템플릿 업로드 슬롯 정의.
+  const TEMPLATE_GROUPS = [
+    { id: 'stamped', label: '범용 템플릿(도장O)', icon: 'fa-stamp' },
+  ]
+  // 항목이 속한 템플릿 업로드 슬롯 id(=bundleFiles의 key) — 전용 템플릿이면 항목 자신의
+  // id, 공유 템플릿이면 그 templateGroup id.
+  function templateSlotIdFor(def) {
+    return def.templateGroup || def.id
+  }
   // 표지는 체크 대상이 아니라 항상 포함되지만, 템플릿 업로드 슬롯은 항목들과 같은 자리에 둔다.
+  // 전용 템플릿 슬롯 + 실제로 쓰이는 공유 템플릿 그룹 슬롯을 한 번씩만 나열한다.
+  const usedGroupIds = [...new Set(BUNDLE_ITEM_DEFS.filter(d => d.templateGroup).map(d => d.templateGroup))]
   const TEMPLATE_SLOTS = [
     { id: 'cover', label: '0. 정성제안서 첨부 표지', icon: 'fa-file-alt', required: true },
-    ...BUNDLE_ITEM_DEFS.map(d => ({ id: d.id, label: d.templateLabel || d.label, icon: d.icon, required: false })),
+    ...BUNDLE_ITEM_DEFS.filter(d => !d.templateGroup).map(d => ({ id: d.id, label: d.templateLabel || d.label, icon: d.icon, required: false })),
+    ...usedGroupIds.map(gid => {
+      const g = TEMPLATE_GROUPS.find(x => x.id === gid)
+      return { id: g.id, label: g.label, icon: g.icon, required: false }
+    }),
   ]
 
   // 1.일정표/2.실적경력/3.동의서는 거의 항상 같이 나가는 "기본 3종"이라, 첨부PPT 생성
@@ -179,6 +246,9 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   // 항목(표준재무제표 등, 앞으로 늘어날 "범용" 항목들)은 매번 체크 해제 상태로 그 뒤에
   // 붙는다. 전부 똑같이 드래그로 순서를 바꿀 수 있고 잠긴 항목은 없다.
   const CORE_IDS = ['schedule', 'career', 'consent']
+  // "범용 템플릿(도장O)"를 공유하는 항목들 — 하나라도 체크되면 도장 선택 UI가 뜨고,
+  // 전부 체크 해제되면 사라진다(2026-09-03 사용자 확인 — 도장 선택은 "딱 한 번만").
+  const STAMP_GROUP_IDS = ['bizreg', 'taxcert', 'localtaxcert', 'corpregistry']
 
   const bundleFiles = {} // id('cover'|'schedule'|'career'|'consent'|...) -> File — 페이지에 머무는 동안 유지
   const bundleItemChecked = {} // id -> boolean
@@ -187,17 +257,23 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   let bundleProjectId = null
   let bundleBtnEl = null
   let bundleDragId = null
-  let bundleBizregStampType = null // '원본대조필' | '사실과상위없음' | null — 사업자등록증 체크 시 선택
+  let bundleDragFromExtra = false // true면 bundleDragId가 "추가서류" 패널 카드에서 시작된 드래그
+  let bundleExtraPanelOpen = false
+  let bundleStampType = null // '원본대조필' | '사실과상위없음' | null — STAMP_GROUP_IDS 중 하나라도 체크 시 선택
+  let bundleCorpRegistryIncludeCancelled = null // 'true' | 'false' | null — 법인등기부등본 체크 시 선택
 
-  /** 첨부PPT 생성 모달을 열 때마다 호출 — 기본 3종은 체크된 채로 맨 앞 순서, 나머지는
-   *  체크 해제 상태로 그 뒤에 배치한 "시작 상태"로 되돌린다(이후 드래그/체크는 자유).
-   *  업로드해둔 템플릿 파일(bundleFiles)은 그대로 유지한다. */
+  /** 첨부PPT 생성 모달을 열 때마다 호출 — 기본 3종만 체크된 채로 목록에 나타난 "시작
+   *  상태"로 되돌린다. 그 외 항목(표준재무제표 등)은 목록에 안 보이고 "추가서류" 패널에
+   *  있다가 드래그해 넣어야 목록에 나타난다(2026-09-04 사용자 확인 — 첨부 종류가 계속
+   *  늘어날 걸 대비해 기본 목록을 짧게 유지). 업로드해둔 템플릿 파일(bundleFiles)은 그대로
+   *  유지한다. */
   function resetBundleSelection() {
-    const extraIds = BUNDLE_ITEM_DEFS.map(d => d.id).filter(id => !CORE_IDS.includes(id))
-    bundleItemOrder = [...CORE_IDS, ...extraIds]
+    bundleItemOrder = [...CORE_IDS]
     CORE_IDS.forEach(id => { bundleItemChecked[id] = true })
-    extraIds.forEach(id => { bundleItemChecked[id] = false })
-    bundleBizregStampType = null
+    BUNDLE_ITEM_DEFS.filter(d => !CORE_IDS.includes(d.id)).forEach(d => { bundleItemChecked[d.id] = false })
+    bundleStampType = null
+    bundleCorpRegistryIncludeCancelled = null
+    bundleExtraPanelOpen = false
   }
 
   // ── 템플릿 업로드 슬롯 (클릭 또는 드래그앤드롭) ────────────────────
@@ -252,11 +328,12 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     listEl.innerHTML = bundleItemOrder.map(id => {
       const def = BUNDLE_ITEM_DEFS.find(d => d.id === id)
       const checked = bundleItemChecked[id]
-      const hasFile = !!bundleFiles[id]
+      const hasFile = !!bundleFiles[templateSlotIdFor(def)]
       return \`
-        <div class="border rounded-xl px-3 py-2.5 flex items-center gap-2 transition
+        <div class="border rounded-xl px-3 py-2.5 flex items-center gap-2 transition cursor-pointer
                     \${checked ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-white'}"
              draggable="true" data-bundle-id="\${id}"
+             onclick="bundleRowClick(event,'\${id}')"
              ondragstart="bundleDragStart(event,'\${id}')"
              ondragover="bundleDragOver(event,'\${id}')"
              ondragend="bundleDragEnd(event)">
@@ -272,6 +349,17 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     }).join('')
   }
 
+  // 체크박스뿐 아니라 행 몸통 아무 데나 눌러도 체크/해제되게 한다(2026-09-04 사용자 확인).
+  // 체크박스 자체를 누른 경우는 onchange가 이미 처리하므로 여기서 다시 토글하면 안 된다 —
+  // 드래그로 순서를 바꾼 경우는 브라우저가 드래그 후 click 이벤트를 보내지 않으므로 그냥
+  // 두면 된다(별도 처리 불필요).
+  function bundleRowClick(ev, id) {
+    if (ev.target.closest('input[type=checkbox]')) return
+    const checkbox = document.querySelector('[data-bundle-id="' + id + '"] input[type=checkbox]')
+    checkbox.checked = !checkbox.checked
+    toggleBundleItem(id, checkbox.checked)
+  }
+
   function toggleBundleItem(id, checked) {
     bundleItemChecked[id] = checked
     renderBundleList()
@@ -279,19 +367,33 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       if (checked) loadBundleSchedulePhases()
       else document.getElementById('bundleSchedulePhaseWrap').classList.add('hidden')
     }
-    if (id === 'bizreg') {
-      if (checked) {
-        document.getElementById('bundleBizregStampWrap').classList.remove('hidden')
+    if (STAMP_GROUP_IDS.includes(id)) {
+      const anyStampNeeded = STAMP_GROUP_IDS.some(sid => bundleItemChecked[sid])
+      if (anyStampNeeded) {
+        document.getElementById('bundleStampWrap').classList.remove('hidden')
       } else {
-        document.getElementById('bundleBizregStampWrap').classList.add('hidden')
-        bundleBizregStampType = null
-        document.querySelectorAll('input[name="bundleBizregStamp"]').forEach(el => { el.checked = false })
+        document.getElementById('bundleStampWrap').classList.add('hidden')
+        bundleStampType = null
+        document.querySelectorAll('input[name="bundleStamp"]').forEach(el => { el.checked = false })
+      }
+    }
+    if (id === 'corpregistry') {
+      if (checked) {
+        document.getElementById('bundleCorpRegistryWrap').classList.remove('hidden')
+      } else {
+        document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
+        bundleCorpRegistryIncludeCancelled = null
+        document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(el => { el.checked = false })
       }
     }
   }
 
-  function onBizregStampChange(value) {
-    bundleBizregStampType = value
+  function onStampChange(value) {
+    bundleStampType = value
+  }
+
+  function onCorpRegistryCancelledChange(value) {
+    bundleCorpRegistryIncludeCancelled = value
   }
 
   // 드래그 중에도 실시간으로 순서가 바뀌어 보이도록, drop을 기다리지 않고
@@ -299,6 +401,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   // 드래그 중인 노드 자체가 사라져서 네이티브 드래그가 끊기므로 insertBefore로 이동만 한다).
   function bundleDragStart(ev, id) {
     bundleDragId = id
+    bundleDragFromExtra = false
     ev.dataTransfer.effectAllowed = 'move'
     ev.target.classList.add('opacity-40')
   }
@@ -317,6 +420,82 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   function bundleDragEnd(ev) {
     ev.target.classList.remove('opacity-40')
     bundleDragId = null
+    bundleDragFromExtra = false
+  }
+
+  // ── 추가서류 패널 (기본 3종 외 항목들 — 드래그해서 왼쪽 목록에 넣는다) ──────────
+  function toggleExtraPanel() {
+    bundleExtraPanelOpen = !bundleExtraPanelOpen
+    document.getElementById('bundleExtraPanel').classList.toggle('hidden', !bundleExtraPanelOpen)
+    const icon = document.getElementById('bundleExtraToggleIcon')
+    icon.classList.toggle('fa-chevron-right', !bundleExtraPanelOpen)
+    icon.classList.toggle('fa-chevron-left', bundleExtraPanelOpen)
+    if (bundleExtraPanelOpen) renderExtraPanel()
+  }
+
+  function renderExtraPanel() {
+    const wrap = document.getElementById('bundleExtraList')
+    // 가나다순 정렬(2026-09-04 사용자 확인) — 아직 목록에 안 들어간(=드래그로 안 넣은)
+    // 항목만 카탈로그에 남는다.
+    const extras = BUNDLE_ITEM_DEFS
+      .filter(d => !CORE_IDS.includes(d.id) && !bundleItemOrder.includes(d.id))
+      .sort((a, b) => a.label.localeCompare(b.label, 'ko'))
+    if (!extras.length) {
+      wrap.innerHTML = '<div class="text-xs text-slate-400 text-center py-6">추가할 서류가 없습니다</div>'
+      return
+    }
+    wrap.innerHTML = extras.map(d => \`
+      <div class="border border-dashed border-indigo-300 rounded-lg px-3 py-2.5 flex items-center gap-2 bg-indigo-50/30 cursor-grab select-none"
+           draggable="true"
+           ondragstart="bundleExtraDragStart(event,'\${d.id}')"
+           ondragend="bundleExtraDragEnd(event)">
+        <i class="fas \${d.icon} text-indigo-400 text-sm"></i>
+        <span class="text-sm text-slate-700 flex-1">\${d.label}</span>
+        <i class="fas fa-grip-vertical text-slate-300 text-xs"></i>
+      </div>\`).join('')
+  }
+
+  function bundleExtraDragStart(ev, id) {
+    bundleDragId = id
+    bundleDragFromExtra = true
+    ev.dataTransfer.effectAllowed = 'move'
+    ev.target.classList.add('opacity-40')
+  }
+  function bundleExtraDragEnd(ev) {
+    ev.target.classList.remove('opacity-40')
+    bundleDragId = null
+    bundleDragFromExtra = false
+  }
+
+  // 추가서류 패널 카드를 왼쪽 항목 목록에 떨어뜨리면 목록 끝에 추가하고 자동 체크한다
+  // (2026-09-04 사용자 확인 — "드래그 하면 자동으로 체크되고"). 목록 안에서의 정확한
+  // 위치는 기존 재정렬 드래그로 바로 조정할 수 있으므로 여기서는 위치 계산 없이 끝에 붙인다.
+  function bundleListDrop(ev) {
+    ev.preventDefault()
+    if (!bundleDragFromExtra || !bundleDragId) return
+    const id = bundleDragId
+    bundleDragFromExtra = false
+    bundleDragId = null
+    if (bundleItemOrder.includes(id)) return
+    bundleItemOrder.push(id)
+    renderExtraPanel()
+    toggleBundleItem(id, true)
+  }
+
+  // 반대 방향 — 왼쪽 목록의 항목을 추가서류 패널로 드래그하면 목록에서 빼서 카탈로그로
+  // 되돌린다(2026-09-04 사용자 확인 — "왼쪽에서 오른쪽으로도 드래그가 되게"). 기본
+  // 3종(CORE_IDS)은 항상 목록에 있어야 하는 항목이라 이 패널로 못 뺀다.
+  function bundleExtraPanelDrop(ev) {
+    ev.preventDefault()
+    if (bundleDragFromExtra || !bundleDragId) return
+    const id = bundleDragId
+    bundleDragId = null
+    if (CORE_IDS.includes(id)) return
+    const idx = bundleItemOrder.indexOf(id)
+    if (idx === -1) return
+    bundleItemOrder.splice(idx, 1)
+    toggleBundleItem(id, false)
+    renderExtraPanel()
   }
 
   async function loadBundleSchedulePhases() {
@@ -352,8 +531,14 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     renderBundleList()
     document.getElementById('bundleSchedulePhaseWrap').classList.add('hidden')
     if (bundleItemChecked['schedule']) loadBundleSchedulePhases()
-    document.getElementById('bundleBizregStampWrap').classList.add('hidden')
-    document.querySelectorAll('input[name="bundleBizregStamp"]').forEach(el => { el.checked = false })
+    document.getElementById('bundleStampWrap').classList.add('hidden')
+    document.querySelectorAll('input[name="bundleStamp"]').forEach(el => { el.checked = false })
+    document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
+    document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(el => { el.checked = false })
+    document.getElementById('bundleExtraPanel').classList.add('hidden')
+    document.getElementById('bundleExtraToggleIcon').classList.add('fa-chevron-right')
+    document.getElementById('bundleExtraToggleIcon').classList.remove('fa-chevron-left')
+    renderExtraPanel()
   }
 
   function closeBundleModal() {
@@ -374,17 +559,25 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       return
     }
     for (const iid of order) {
-      if (!bundleFiles[iid]) {
-        const def = BUNDLE_ITEM_DEFS.find(d => d.id === iid)
-        alert('"' + (def.templateLabel || def.label) + '" 템플릿(.pptx)을 업로드해주세요.')
+      const def = BUNDLE_ITEM_DEFS.find(d => d.id === iid)
+      if (!bundleFiles[templateSlotIdFor(def)]) {
+        const slotLabel = def.templateGroup
+          ? TEMPLATE_GROUPS.find(g => g.id === def.templateGroup).label
+          : (def.templateLabel || def.label)
+        alert('"' + slotLabel + '" 템플릿(.pptx)을 업로드해주세요.')
         return
       }
     }
     const additionalPhaseIds = order.includes('schedule')
       ? [...document.querySelectorAll('.bundle-schedule-phase-checkbox:checked')].map(el => Number(el.value))
       : []
-    if (order.includes('bizreg') && !bundleBizregStampType) {
-      alert('사업자등록증에 찍을 도장(원본대조필/사실과상위없음)을 선택해주세요.')
+    const stampNeeded = STAMP_GROUP_IDS.some(sid => order.includes(sid))
+    if (stampNeeded && !bundleStampType) {
+      alert('찍을 도장(원본대조필/사실과상위없음)을 선택해주세요.')
+      return
+    }
+    if (order.includes('corpregistry') && bundleCorpRegistryIncludeCancelled === null) {
+      alert('법인등기부등본의 말소사항 포함 여부를 선택해주세요.')
       return
     }
 
@@ -397,8 +590,12 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       fd.append('cover', bundleFiles['cover'])
       fd.append('order', JSON.stringify(order))
       fd.append('additionalPhaseIds', JSON.stringify(additionalPhaseIds))
-      if (order.includes('bizreg')) fd.append('stampType', bundleBizregStampType)
-      order.forEach(iid => fd.append(iid, bundleFiles[iid]))
+      if (stampNeeded) fd.append('stampType', bundleStampType)
+      if (order.includes('corpregistry')) fd.append('corpRegistryIncludeCancelled', bundleCorpRegistryIncludeCancelled)
+      order.forEach(iid => {
+        const def = BUNDLE_ITEM_DEFS.find(d => d.id === iid)
+        fd.append(iid, bundleFiles[templateSlotIdFor(def)])
+      })
       const r = await fetch('/api/ppt-attachment-bundle/' + id, { method: 'POST', body: fd })
       if (!r.ok) {
         const j = await r.json().catch(() => ({}))

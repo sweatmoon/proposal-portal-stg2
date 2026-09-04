@@ -110,6 +110,52 @@ async function withNasRetry<T>(label: string, fn: (sid: string) => Promise<T>): 
   return null
 }
 
+/** 폴더 안에서 .pptx 확장자인 파일 하나를 찾아 통째로 받아온다 — 표준재무제표/사업자등록증/
+ *  국세 납세증명서처럼 "회사 서류 원본이 pptx 한 장짜리로 폴더에 들어있고, 파일명에 갱신
+ *  날짜가 박혀 있어 계속 바뀌므로 파일명을 하드코딩하지 않는" 항목들이 공유하는 패턴
+ *  (2026-09-03 — 3번째 중복이라 공용 함수로 추출). label은 실패 로그에 쓸 이름. */
+async function fetchPptxFromFolder(folder: string, label: string): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn(`[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 ${label} 조회를 건너뜁니다.`)
+    return null
+  }
+  return withNasRetry(`${label} 조회`, async sid => {
+    const files = await listFolder(sid, folder)
+    const pptxFile = files.find(f => !f.isdir && /\.pptx$/i.test(f.name))
+    if (!pptxFile) throw new Error('폴더에서 .pptx 파일을 찾지 못함: ' + folder)
+    const buf = await downloadFile(sid, `${folder}/${pptxFile.name}`)
+    if (!buf) throw new Error('다운로드 실패: ' + pptxFile.name)
+    return buf
+  })
+}
+
+/** 폴더 안에서 predicate를 만족하는 .pdf 파일 중, 파일이름 기준으로 가장 최신(문자열
+ *  오름차순 정렬했을 때 마지막) 것 하나를 찾아 통째로 받아온다 — 지방세 납세증명서/
+ *  법인등기부등본처럼 "날짜가 파일명 뒤에 붙어서 계속 새 파일이 추가되는" 폴더에서
+ *  "가장 최신 파일"을 고를 때 쓰는 공용 패턴(2026-09-03 사용자 확인 — "파일이름상으로"
+ *  가장 최신). */
+async function fetchLatestPdfFromFolder(
+  folder: string,
+  label: string,
+  predicate: (name: string) => boolean = () => true
+): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn(`[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 ${label} 조회를 건너뜁니다.`)
+    return null
+  }
+  return withNasRetry(`${label} 조회`, async sid => {
+    const files = await listFolder(sid, folder)
+    const latest = files
+      .filter(f => !f.isdir && /\.pdf$/i.test(f.name) && predicate(f.name))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
+      .pop()
+    if (!latest) throw new Error('조건에 맞는 .pdf 파일을 찾지 못함: ' + folder)
+    const buf = await downloadFile(sid, `${folder}/${latest.name}`)
+    if (!buf) throw new Error('다운로드 실패: ' + latest.name)
+    return buf
+  })
+}
+
 // 회사 표준재무제표 pptx가 있는 폴더. 파일명에 갱신 날짜가 박혀 있어("표준재무제표(3년)_
 // 260720.pptx") 계속 바뀌므로 파일명을 하드코딩하지 않고, 이 폴더에서 .pptx 확장자인
 // 파일을 찾아 그때그때 사용한다(2026-09-02 확인 — 폴더 안에 연도별 .pdf도 같이 있지만
@@ -122,18 +168,7 @@ const FINANCIAL_STATEMENT_FOLDER = '/activo/04.제안팀/99.악티보포털참�
  * 못 찾거나 NAS 연동이 실패하면 null (호출 쪽에서 이 첨부 항목만 건너뛰도록 처리).
  */
 export async function fetchStandardFinancialStatementPptx(): Promise<Buffer | null> {
-  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
-    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 표준재무제표 조회를 건너뜁니다.')
-    return null
-  }
-  return withNasRetry('표준재무제표 조회', async sid => {
-    const files = await listFolder(sid, FINANCIAL_STATEMENT_FOLDER)
-    const pptxFile = files.find(f => !f.isdir && /\.pptx$/i.test(f.name))
-    if (!pptxFile) throw new Error('폴더에서 .pptx 파일을 찾지 못함: ' + FINANCIAL_STATEMENT_FOLDER)
-    const buf = await downloadFile(sid, `${FINANCIAL_STATEMENT_FOLDER}/${pptxFile.name}`)
-    if (!buf) throw new Error('다운로드 실패: ' + pptxFile.name)
-    return buf
-  })
+  return fetchPptxFromFolder(FINANCIAL_STATEMENT_FOLDER, '표준재무제표')
 }
 
 // 사업자등록증 pptx가 있는 폴더 — 표준재무제표와 같은 이유로 파일명을 고정하지 않고
@@ -143,18 +178,40 @@ const BUSINESS_REGISTRATION_FOLDER = '/activo/04.제안팀/99.악티보포털참
 /** NAS에서 사업자등록증 pptx 원본을 통째로 받아옵니다. 표준재무제표처럼 사업과 무관하게
  *  항상 같은 회사 서류라 조회 키가 필요 없습니다. 못 찾으면 null. */
 export async function fetchBusinessRegistrationPptx(): Promise<Buffer | null> {
-  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
-    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 사업자등록증 조회를 건너뜁니다.')
-    return null
-  }
-  return withNasRetry('사업자등록증 조회', async sid => {
-    const files = await listFolder(sid, BUSINESS_REGISTRATION_FOLDER)
-    const pptxFile = files.find(f => !f.isdir && /\.pptx$/i.test(f.name))
-    if (!pptxFile) throw new Error('폴더에서 .pptx 파일을 찾지 못함: ' + BUSINESS_REGISTRATION_FOLDER)
-    const buf = await downloadFile(sid, `${BUSINESS_REGISTRATION_FOLDER}/${pptxFile.name}`)
-    if (!buf) throw new Error('다운로드 실패: ' + pptxFile.name)
-    return buf
-  })
+  return fetchPptxFromFolder(BUSINESS_REGISTRATION_FOLDER, '사업자등록증')
+}
+
+// 국세 납세증명서 pptx가 있는 폴더 — 유효기한별 .pdf도 같이 있지만, 이미지가 들어있는
+// pptx 원본은 하나뿐이라 그걸 쓴다(2026-09-03 사용자 확인 — "ppt 파일" 사용).
+const TAX_CERTIFICATE_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/01.회사/11.국세 납세증명서'
+
+/** NAS에서 국세 납세증명서 pptx 원본을 통째로 받아옵니다. 못 찾으면 null. */
+export async function fetchTaxCertificatePptx(): Promise<Buffer | null> {
+  return fetchPptxFromFolder(TAX_CERTIFICATE_FOLDER, '국세 납세증명서')
+}
+
+// 지방세 납세증명서 .pdf가 있는 폴더 — pptx 없이 유효기한별 .pdf만 계속 추가되므로,
+// 파일이름 기준 가장 최신 것을 그때그때 골라 쓴다(2026-09-03 사용자 확인).
+const LOCAL_TAX_CERTIFICATE_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/01.회사/12.지방세 납세증명서'
+
+/** NAS에서 지방세 납세증명서 중 파일이름 기준 가장 최신 .pdf를 받아옵니다. 못 찾으면 null. */
+export async function fetchLocalTaxCertificatePdf(): Promise<Buffer | null> {
+  return fetchLatestPdfFromFolder(LOCAL_TAX_CERTIFICATE_FOLDER, '지방세 납세증명서')
+}
+
+// 법인등기부등본 .pdf가 있는 폴더 — "말소사항포함"이 파일명에 들어간 것과 안 들어간 것
+// 두 종류가 같이 있어, 사용자가 첨부PPT 생성 시 고른 종류에 맞춰 그중 파일이름 기준 가장
+// 최신 것을 쓴다(2026-09-03 사용자 확인).
+const CORPORATE_REGISTRY_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/01.회사/07.법인등기부등본'
+
+/** NAS에서 법인등기부등본 .pdf를 받아옵니다. includeCancelled가 true면 파일명에
+ *  "말소사항포함"이 들어간 것 중, false면 안 들어간 것 중 파일이름 기준 가장 최신 것을
+ *  씁니다. 못 찾으면 null. */
+export async function fetchCorporateRegistryPdf(includeCancelled: boolean): Promise<Buffer | null> {
+  const predicate = includeCancelled
+    ? (name: string) => name.includes('말소사항포함')
+    : (name: string) => !name.includes('말소사항포함')
+  return fetchLatestPdfFromFolder(CORPORATE_REGISTRY_FOLDER, '법인등기부등본', predicate)
 }
 
 // "원본대조필"/"사실과상위없음" 도장 이미지가 있는 폴더 — 같은 도장이 배경 제거 버전으로

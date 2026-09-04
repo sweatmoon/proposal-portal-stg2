@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@napi-rs/canvas": "^1.0.8",
     "hono": "^4.12.30",
     "jszip": "^3.10.1",
     "node-html-parser": "^9.0.1",
+    "pdfjs-dist": "^6.3.289",
     "pg": "^8.13.3"
   },
   "devDependencies": {

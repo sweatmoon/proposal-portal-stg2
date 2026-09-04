@@ -32,7 +32,7 @@
  * 구분이 안 되고, 슬라이드에서 차지하는 크기로만 구분됨)는 findPicPlaceholdersBySize +
  * replaceOnePlaceholder를 쓴다 — src/routes/ppt-business-registration.ts 참고.
  */
-import type JSZip from 'jszip'
+import JSZip from 'jszip'
 
 /** PNG 파일의 실제 가로/세로 픽셀 크기를 헤더에서 바로 읽는다(라이브러리 없이 —
  *  PNG 시그니처 8바이트 다음 IHDR 청크의 처음 8바이트가 항상 width/height, 빅엔디안).
@@ -91,6 +91,31 @@ function resizePicToAspectRatio(slideXml: string, rId: string, imgBuf: Buffer): 
  * 복제 전(buildMultiSlideDeck 호출 전) 원본 템플릿에 대해서만 호출해야 한다 — 복제된
  * 슬라이드들은 전부 같은 Target을 상대경로로 그대로 물려받기 때문이다.
  */
+/** NAS에서 받아온 원본 pptx(사업자등록증/국세 납세증명서 등 — 슬라이드 1장당 스캔본
+ *  1페이지)의 슬라이드마다 첫 번째 이미지를 순서대로 전부 뽑아낸다. 원본이 여러 슬라이드
+ *  (여러 페이지)면 배열에 페이지 수만큼 담긴다(2026-09-04 사용자 확인 — "참고하는 파일이
+ *  2페이지 이상이면 모두 넣어야 함"). 여러 항목에서 똑같이 쓰이는 패턴이라 공용으로
+ *  뺐다(2026-09-03). */
+export async function extractAllImagesFromPptx(sourcePptx: Buffer): Promise<Buffer[]> {
+  const zip = await JSZip.loadAsync(sourcePptx)
+  const slideFiles = Object.keys(zip.files)
+    .filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
+    .sort((a, b) => Number(a.match(/slide(\d+)/)![1]) - Number(b.match(/slide(\d+)/)![1]))
+
+  const images: Buffer[] = []
+  for (const slideFile of slideFiles) {
+    const relsFile = slideFile.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels'
+    const relsXml = await zip.file(relsFile)?.async('string')
+    if (!relsXml) continue
+    const m = relsXml.match(/<Relationship[^>]*Type="[^"]*\/image"[^>]*Target="([^"]+)"/)
+    if (!m) continue
+    const mediaPath = 'ppt/' + m[1].replace(/^(\.\.\/)+/, '')
+    const mediaFile = zip.file(mediaPath)
+    if (mediaFile) images.push(await mediaFile.async('nodebuffer'))
+  }
+  return images
+}
+
 export async function findPlaceholderImageTarget(zip: JSZip): Promise<string | null> {
   const templateSlideFile = Object.keys(zip.files).find(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
   if (!templateSlideFile) return null
@@ -177,16 +202,22 @@ export async function findPicPlaceholdersBySize(
   return results
 }
 
-/** findPicPlaceholdersBySize로 찾은 자리 하나(target)를 실제 이미지로 바꿔치기하고, 그
- *  이미지의 실제 비율에 맞게 자리를 다시 계산한다(오른쪽 좌표 고정, 높이 고정). 슬라이드
- *  복제가 없는 단일 슬라이드 전용 — replaceSlideImages와 달리 슬라이드 번호가 없으므로
- *  media 파일명을 mediaName으로 그대로 지정한다. */
+/** findPicPlaceholdersBySize로 찾은 자리 하나(target)를 실제 이미지로 바꿔치기한다.
+ *  슬라이드 복제가 없는 단일 슬라이드 전용 — replaceSlideImages와 달리 슬라이드 번호가
+ *  없으므로 media 파일명을 mediaName으로 그대로 지정한다.
+ *  preserveAspectRatio(기본 true): 실제 이미지의 비율에 맞게 자리를 다시 계산할지 여부
+ *  (오른쪽 좌표 고정, 높이 고정) — "도장" 같이 작고 원래 비율이 중요한 이미지에는 켜고,
+ *  스캔본/PDF 첫 페이지처럼 "템플릿이 정한 큰 자리를 그대로 채우는" 이미지에는 꺼야
+ *  자리가 오른쪽으로 밀리지 않는다(2026-09-04 사용자 확인 — "도장(O) 문서들 너비 이미지와
+ *  동일하게 해줘 오른쪽으로 치우쳐져서 뽑히네": 큰 스캔본 자리에도 이 보정이 걸려서
+ *  이미지 실제 비율이 템플릿 자리보다 좁으면 자리가 줄어들며 오른쪽으로 밀려 보였다). */
 export async function replaceOnePlaceholder(
   zip: JSZip,
   slideFile: string,
   target: string,
   imgBuf: Buffer,
-  mediaName: string
+  mediaName: string,
+  preserveAspectRatio = true
 ): Promise<void> {
   const relsFile = slideFile.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels'
   const relsXml = await zip.file(relsFile)?.async('string')
@@ -198,7 +229,7 @@ export async function replaceOnePlaceholder(
   const newTarget = target.replace(/[^/]+$/, mediaName)
   zip.file(relsFile, relsXml.replace(`Target="${target}"`, `Target="${newTarget}"`))
 
-  if (rId) {
+  if (rId && preserveAspectRatio) {
     const slideXml = await zip.file(slideFile)!.async('string')
     zip.file(slideFile, resizePicToAspectRatio(slideXml, rId, imgBuf))
   }

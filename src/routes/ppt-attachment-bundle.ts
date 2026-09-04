@@ -18,9 +18,12 @@
  *     src/routes/ppt-consent.ts                3. 비상근 감리원 참여 동의서
  *     src/routes/ppt-financial-statement.ts    4. 표준재무제표 (NAS의 회사 표준재무제표 원본을
  *                                               페이지별 이미지로 뽑아 범용 템플릿에 붙여넣음)
- *     src/routes/ppt-business-registration.ts  5. 사업자등록증 (전용 템플릿 — 슬라이드 1장에
- *                                               큰 자리=NAS 사업자등록증 스캔본, 작은 자리=
- *                                               사용자가 고른 도장(원본대조필/사실과상위없음))
+ *     src/routes/ppt-business-registration.ts  5. 사업자등록증 ("범용 템플릿(도장O)" — 슬라이드
+ *     src/routes/ppt-tax-certificate.ts        6. 국세 납세증명서    1장에 큰 자리=NAS 스캔본/
+ *     src/routes/ppt-local-tax-certificate.ts  7. 지방세 납세증명서  PDF 첫 페이지, 작은 자리=
+ *     src/routes/ppt-corporate-registry.ts     8. 법인등기부등본     사용자가 고른 도장. 이
+ *                                               4개 항목이 템플릿 파일 하나(범용 템플릿
+ *                                               (도장O))를 공유한다 — 2026-09-03 사용자 확인)
  *   공용 OOXML 조립 유틸 (위 라우트들이 나눠서 사용)
  *     src/lib/pptx-runtext.ts                  [placeholder] 텍스트 치환 (런 분산 대응)
  *     src/lib/pptx-table-rows.ts               일정표류 표 동적 확장(rowSpan/vMerge, 페이지 분할)
@@ -28,8 +31,10 @@
  *     src/lib/pptx-deck.ts                     템플릿 슬라이드(1~N장)를 데이터 개수만큼 복제
  *     src/lib/pptx-cover-toc.ts                표지의 번호 매긴 목차를 선택 항목으로 재작성
  *     src/lib/pptx-merge.ts                    완성된 여러 pptx를 한 파일로 이어붙이기
- *     src/lib/pptx-image-swap.ts               템플릿의 placeholder 이미지를 실제 이미지로 교체
- *                                               (동의서 개인도장 · 표준재무제표 페이지가 공유)
+ *     src/lib/pptx-image-swap.ts               템플릿의 placeholder 이미지를 실제 이미지로
+ *                                               교체(원본 비율 유지) + pptx에서 이미지 추출
+ *     src/lib/pptx-stamped-doc.ts              "범용 템플릿(도장O)" 조립 공용 함수(5~8번 공유)
+ *     src/lib/pdf-render.ts                    PDF 첫 페이지를 PNG로 렌더링(지방세/법인등기부등본)
  *     src/lib/nas-client.ts                    Synology NAS(QuickConnect)에서 파일 조회
  *
  * 다른 사이트(예: proposal-portal-main)로 이식하는 방법:
@@ -73,11 +78,24 @@ import { buildCareerZip } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
 import { buildFinancialStatementZip } from './ppt-financial-statement.js'
 import { buildBusinessRegistrationZip } from './ppt-business-registration.js'
+import { buildTaxCertificateZip } from './ppt-tax-certificate.js'
+import { buildLocalTaxCertificateZip } from './ppt-local-tax-certificate.js'
+import { buildCorporateRegistryZip } from './ppt-corporate-registry.js'
 import type { CompanyStampType } from '../lib/nas-client.js'
 import { buildCoverZip } from './ppt-cover.js'
 import { mergeDecksSharingMaster } from '../lib/pptx-merge.js'
 
 const app = new Hono()
+
+/** "범용 템플릿(도장O)" 계열 항목(사업자등록증/국세·지방세 납세증명서/법인등기부등본)이
+ *  전부 같은 stampType 검증을 공유해서 뺐다(2026-09-03 — 이제 4곳에서 씀). */
+function validateStampType(form: FormData): CompanyStampType {
+  const stampType = form.get('stampType')
+  if (stampType !== '원본대조필' && stampType !== '사실과상위없음') {
+    throw new Error('찍을 도장 종류(원본대조필/사실과상위없음)를 선택해주세요')
+  }
+  return stampType
+}
 
 /** 첨부 항목 레지스트리 — 나중에 새 첨부가 생기면 여기에 한 줄만 추가하면 된다.
  *  build()의 titlePrefix는 이 항목이 선택된 순서에서 몇 번째인지("1. " 등)이며, 각 항목의
@@ -114,11 +132,36 @@ const ATTACHMENT_TYPES: Record<
   bizreg: {
     label: '사업자등록증',
     build: async (buf, projectId, form, titlePrefix) => {
-      const stampType = form.get('stampType')
-      if (stampType !== '원본대조필' && stampType !== '사실과상위없음') {
-        throw new Error('사업자등록증 도장 종류(원본대조필/사실과상위없음)를 선택해주세요')
+      const stampType = validateStampType(form)
+      const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType, titlePrefix)
+      return zip
+    },
+  },
+  taxcert: {
+    label: '국세 납세증명서',
+    build: async (buf, projectId, form, titlePrefix) => {
+      const stampType = validateStampType(form)
+      const { zip } = await buildTaxCertificateZip(buf, projectId, stampType, titlePrefix)
+      return zip
+    },
+  },
+  localtaxcert: {
+    label: '지방세 납세증명서',
+    build: async (buf, projectId, form, titlePrefix) => {
+      const stampType = validateStampType(form)
+      const { zip } = await buildLocalTaxCertificateZip(buf, projectId, stampType, titlePrefix)
+      return zip
+    },
+  },
+  corpregistry: {
+    label: '법인등기부등본',
+    build: async (buf, projectId, form, titlePrefix) => {
+      const stampType = validateStampType(form)
+      const includeCancelledRaw = form.get('corpRegistryIncludeCancelled')
+      if (includeCancelledRaw !== 'true' && includeCancelledRaw !== 'false') {
+        throw new Error('법인등기부등본 말소사항 포함 여부를 선택해주세요')
       }
-      const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType as CompanyStampType, titlePrefix)
+      const { zip } = await buildCorporateRegistryZip(buf, projectId, includeCancelledRaw === 'true', stampType, titlePrefix)
       return zip
     },
   },
