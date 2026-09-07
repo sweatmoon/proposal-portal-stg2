@@ -40,7 +40,7 @@
 import { Hono } from 'hono'
 import JSZip from 'jszip'
 import { queryOne } from '../db/client.js'
-import { applyPlaceholderMap } from '../lib/pptx-runtext.js'
+import { applyPlaceholderMap, withFreshRowId } from '../lib/pptx-runtext.js'
 import { buildMultiSlideDeck } from '../lib/pptx-deck.js'
 import { fetchStaffingStatusXlsx } from '../lib/nas-client.js'
 import { loadSheetRows } from '../lib/xlsx-parse.js'
@@ -117,17 +117,6 @@ function rowToMap(r: StaffingRow): Record<string, string> {
     '[감리경력]': r.auditCareerYears,
     '[감리참여건수]': formatAuditCount(r.auditCount),
   }
-}
-
-/** 클론한 행마다 새 <a16:rowId>를 부여한다 — 원본 견본 행의 ID를 그대로 복제하면 모든 행이
- *  같은 ID를 갖게 되어, 파워포인트가 어느 행이 편집 대상인지 못 가리고 다른 셀을 고쳐도
- *  첫 행으로 커서가 튀는 문제가 있었다(2026-09-04 실측 — 사용자 확인: "다른 셀 수정하려고
- *  하니까 첫행으로 날아가는데"). */
-function withFreshRowId(rowXml: string): string {
-  return rowXml.replace(
-    /<a16:rowId xmlns:a16="[^"]*" val="\d+"\/>/,
-    m => m.replace(/val="\d+"/, `val="${Math.floor(Math.random() * 2147483647)}"`)
-  )
 }
 
 function extractText(xml: string): string {

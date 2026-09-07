@@ -122,6 +122,24 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
             <i id="bundleExtraToggleIcon" class="fas fa-chevron-right text-[10px]"></i>
           </button>
 
+          <!-- 투입 감리원별 실적 및 경력 선택 시에만 나타나는 페이지 구성 선택 — 2페이지(기본,
+               유사 감리실적 최대 35건) 또는 1페이지(감리경력 상위 15건 + IT경력·자격증을
+               한 페이지에, 2026-09-05 사용자 확인 — "2페이지 체크하는거 1페이지 체크하는거
+               따로 있어야지" — 토글 체크박스 하나가 아니라 라디오 버튼 2개로). -->
+          <div id="bundleCareerOnePageWrap" class="hidden bg-teal-50 rounded-xl p-3 border border-teal-200">
+            <div class="text-xs font-bold text-teal-700 mb-2">투입 감리원별 실적 및 경력 페이지 구성</div>
+            <div class="flex gap-4 text-sm text-slate-700">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleCareerPageMode" value="2page" class="accent-teal-600" onchange="onCareerPageModeChange(this.value)">
+                2페이지
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleCareerPageMode" value="1page" class="accent-teal-600" onchange="onCareerPageModeChange(this.value)">
+                1페이지
+              </label>
+            </div>
+          </div>
+
           <!-- 일정표 선택 시에만 나타나는 단계별 추가/정기 선택 -->
           <div id="bundleSchedulePhaseWrap" class="hidden bg-indigo-50 rounded-xl p-3 border border-indigo-200">
             <div class="text-xs font-bold text-indigo-700 mb-1">단계별 감리 구분 선택</div>
@@ -269,6 +287,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   let bundleExtraPanelOpen = false
   let bundleStampType = null // '원본대조필' | '사실과상위없음' | null — STAMP_GROUP_IDS 중 하나라도 체크 시 선택
   let bundleCorpRegistryIncludeCancelled = null // 'true' | 'false' | null — 법인등기부등본 체크 시 선택
+  let bundleCareerPageMode = '2page' // '2page' | '1page' — 투입 감리원별 실적 및 경력 페이지 구성
 
   /** 첨부PPT 생성 모달을 열 때마다 호출 — 기본 3종만 체크된 채로 목록에 나타난 "시작
    *  상태"로 되돌린다. 그 외 항목(표준재무제표 등)은 목록에 안 보이고 "추가서류" 패널에
@@ -281,6 +300,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     BUNDLE_ITEM_DEFS.filter(d => !CORE_IDS.includes(d.id)).forEach(d => { bundleItemChecked[d.id] = false })
     bundleStampType = null
     bundleCorpRegistryIncludeCancelled = null
+    bundleCareerPageMode = '2page'
     bundleExtraPanelOpen = false
   }
 
@@ -375,6 +395,18 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       if (checked) loadBundleSchedulePhases()
       else document.getElementById('bundleSchedulePhaseWrap').classList.add('hidden')
     }
+    if (id === 'career') {
+      if (checked) {
+        document.getElementById('bundleCareerOnePageWrap').classList.remove('hidden')
+        bundleCareerPageMode = '2page'
+        const radio2page = document.querySelector('input[name="bundleCareerPageMode"][value="2page"]')
+        if (radio2page) radio2page.checked = true
+      } else {
+        document.getElementById('bundleCareerOnePageWrap').classList.add('hidden')
+        bundleCareerPageMode = '2page'
+        document.querySelectorAll('input[name="bundleCareerPageMode"]').forEach(el => { el.checked = false })
+      }
+    }
     if (STAMP_GROUP_IDS.includes(id)) {
       const anyStampNeeded = STAMP_GROUP_IDS.some(sid => bundleItemChecked[sid])
       if (anyStampNeeded) {
@@ -402,6 +434,10 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
 
   function onCorpRegistryCancelledChange(value) {
     bundleCorpRegistryIncludeCancelled = value
+  }
+
+  function onCareerPageModeChange(value) {
+    bundleCareerPageMode = value
   }
 
   // 드래그 중에도 실시간으로 순서가 바뀌어 보이도록, drop을 기다리지 않고
@@ -543,6 +579,8 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     document.querySelectorAll('input[name="bundleStamp"]').forEach(el => { el.checked = false })
     document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
     document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(el => { el.checked = false })
+    document.getElementById('bundleCareerOnePageWrap').classList.toggle('hidden', !bundleItemChecked['career'])
+    document.querySelectorAll('input[name="bundleCareerPageMode"]').forEach(el => { el.checked = el.value === '2page' })
     document.getElementById('bundleExtraPanel').classList.add('hidden')
     document.getElementById('bundleExtraToggleIcon').classList.add('fa-chevron-right')
     document.getElementById('bundleExtraToggleIcon').classList.remove('fa-chevron-left')
@@ -600,6 +638,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       fd.append('additionalPhaseIds', JSON.stringify(additionalPhaseIds))
       if (stampNeeded) fd.append('stampType', bundleStampType)
       if (order.includes('corpregistry')) fd.append('corpRegistryIncludeCancelled', bundleCorpRegistryIncludeCancelled)
+      if (order.includes('career')) fd.append('careerOnePage', String(bundleCareerPageMode === '1page'))
       order.forEach(iid => {
         const def = BUNDLE_ITEM_DEFS.find(d => d.id === iid)
         fd.append(iid, bundleFiles[templateSlotIdFor(def)])

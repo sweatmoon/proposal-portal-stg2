@@ -123,7 +123,10 @@ const ATTACHMENT_TYPES: Record<
   },
   career: {
     label: '투입 감리원별 실적 및 경력',
-    build: async (buf, projectId, _form, titlePrefix) => (await buildCareerZip(buf, projectId, titlePrefix)).zip,
+    build: async (buf, projectId, form, titlePrefix) => {
+      const onePage = form.get('careerOnePage') === 'true'
+      return (await buildCareerZip(buf, projectId, titlePrefix, onePage)).zip
+    },
   },
   consent: {
     label: '비상근 감리원 참여 동의서',

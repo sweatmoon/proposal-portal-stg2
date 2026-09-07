@@ -31,6 +31,20 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** 표 견본 행(<a:tr>) 하나를 여러 데이터 행으로 복제할 때 공통으로 쓴다. 파워포인트가
+ *  Microsoft 365 공동편집용으로 붙이는 <a16:rowId>는 행마다 고유해야 하는데, 견본 행의
+ *  ID를 그대로 복제하면 결과물의 모든 행이 같은 ID를 갖게 되어 파워포인트가 어느 행이
+ *  편집 대상인지 못 가리고 다른 셀을 고쳐도 첫 행으로 커서가 튀는 문제가 있었다
+ *  (2026-09-04 상근인력현황 표에서 최초 발견 — 사용자 확인: "다른 셀 수정하려고 하니까
+ *  첫행으로 날아가는데"). 이 태그가 아예 없는 템플릿(구버전 파워포인트로만 편집된 파일)
+ *  에서는 그냥 원본 그대로 반환한다. */
+export function withFreshRowId(rowXml: string): string {
+  return rowXml.replace(
+    /<a16:rowId xmlns:a16="[^"]*" val="\d+"\/>/,
+    m => m.replace(/val="\d+"/, `val="${Math.floor(Math.random() * 2147483647)}"`)
+  )
+}
+
 /** rPr(서식) 블록을 추출. self-closing이면 그것을, 아니면 <a:rPr>...</a:rPr> 쌍을 그대로 추출.
  *  (중첩된 자식 태그의 self-closing "/>"에서 잘못 멈추지 않도록 두 케이스를 분리 처리) */
 function extractRPr(runXml: string): string {

@@ -63,6 +63,10 @@ const HISTORY_VISIBLE_CAP = 35
 const HISTORY_SLIDE1_CAP = 25
 const IT_CAREER_CAP = 3
 const CERT_CAP = 4
+// "1페이지로 압축" 옵션(2026-09-05 사용자 확인 — "감리경력을 줄이고 나머지 감리외경력과
+// 자격증을 한 페이지에 몰아넣은 1페이지로 뽑는 기능")에서 보여줄 유사 감리 실적 건수.
+// 일단 15건으로 시작 — 필요하면 이 값만 바꾸면 됨.
+const ONE_PAGE_HISTORY_CAP = 15
 // 발주처/주관기관 카테고리 이름은 사업마다 사용자가 직접 입력하는 자유 텍스트라 값이
 // 고정돼있지 않다 (사업1은 "주관기관", 사업2는 "발주기관"으로 확인됨 — 2026-09-01).
 // 정확히 같은 문자열인지 대신, 한국어에서 발주처를 가리킬 때 공통적으로 쓰이는 "기관"이
@@ -113,6 +117,12 @@ interface PersonChunk {
   slide1Clusters: HistoryRowData[][]
   slide2Clusters: HistoryRowData[][]
   lastRow: HistoryRowData | null
+  /** "1페이지로 압축" 모드 전용 — 유사 감리 실적 상위 ONE_PAGE_HISTORY_CAP건. 일반 모드에서는 빈 배열. */
+  onePageClusters: HistoryRowData[][]
+  /** "1페이지로 압축" 모드에서 실제 건수가 ONE_PAGE_HISTORY_CAP을 넘을 때만 채워지는
+   *  "총 건수" 요약 행(가장 오래된 이력, 번호=전체 건수) — lastRow와 같은 개념이되 기준
+   *  건수만 다르다. 안 넘으면 null(요약 행 자체를 안 넣음). */
+  onePageLastRow: HistoryRowData | null
   itCareerDuration: string
   itCareerRows: { period: string; career: string; duty: string; basis: string }[]
   certTotal: number
@@ -273,7 +283,12 @@ export interface CareerZipResult {
 /** 이 파일의 핵심 로직 — 단독 다운로드 라우트와 첨부 묶음 라우트 양쪽에서 호출한다.
  *  titlePrefix: 첨부PPT 묶음에서 이 항목이 몇 번째로 선택됐는지("2. " 등)를 제목 앞에 붙인다
  *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다). */
-export async function buildCareerZip(templateBuf: Buffer, projectId: number, titlePrefix = ''): Promise<CareerZipResult> {
+export async function buildCareerZip(
+  templateBuf: Buffer,
+  projectId: number,
+  titlePrefix = '',
+  onePage = false
+): Promise<CareerZipResult> {
     // project/members/keywords/mapping은 서로 의존하는 값이 없는 독립 조회인데도 순서대로
     // await하면 원격 DB 환경에서는 라운드트립 지연이 그대로 4번 쌓인다(2026-09-02 실측: 이
     // 서버 환경에서 단순 조회 1번도 지연이 커서, 쿼리를 줄이는 것 자체가 핵심). 서로 안
@@ -379,22 +394,42 @@ export async function buildCareerZip(templateBuf: Buffer, projectId: number, tit
         participation: fmtParticipation(entry.h.participation_rate),
       })
 
-      const visible = withMatch.slice(0, HISTORY_VISIBLE_CAP)
-      const allClusters = clusterConsecutive(visible.map((e, i) => toRowData(e, i + 1)))
-      const { first: slide1Clusters, rest: slide2Clusters } = splitClustersByBudget(allClusters, HISTORY_SLIDE1_CAP)
-      // 번호는 최종 슬라이드1→슬라이드2 순서로 다시 매긴다 (클러스터 경계에 맞춰 25행에서
-      // 살짝 못 미칠 수도 있으므로 원래 인덱스가 아니라 실제 출력 순서 기준으로).
-      let seq = 0
-      for (const cl of slide1Clusters) for (const e of cl) e.no = ++seq
-      for (const cl of slide2Clusters) for (const e of cl) e.no = ++seq
-
-      let lastRow: HistoryRowData | null = null
-      if (history.length > HISTORY_VISIBLE_CAP) {
+      // 실제 건수가 cap을 넘을 때만 "총 건수" 요약 행(가장 오래된 이력, 번호=전체 건수)을
+      // 만든다 — 일반 모드의 lastRow와 1페이지 모드의 onePageLastRow가 기준 건수만 다르고
+      // 로직은 같아서 공용 클로저로 뺐다.
+      const findOldestBeyondCap = (cap: number): HistoryRowData | null => {
+        if (history.length <= cap) return null
         let oldest = withMatch[0]
         for (const e of withMatch) {
           if ((e.h.audit_yearmonth || '') < (oldest.h.audit_yearmonth || '')) oldest = e
         }
-        lastRow = toRowData(oldest, history.length)
+        return toRowData(oldest, history.length)
+      }
+
+      let slide1Clusters: HistoryRowData[][] = []
+      let slide2Clusters: HistoryRowData[][] = []
+      let lastRow: HistoryRowData | null = null
+      let onePageClusters: HistoryRowData[][] = []
+      let onePageLastRow: HistoryRowData | null = null
+
+      if (onePage) {
+        // "1페이지로 압축": 상위 ONE_PAGE_HISTORY_CAP건 + (넘으면) "중간 생략" 요약 행.
+        const capped = withMatch.slice(0, ONE_PAGE_HISTORY_CAP)
+        onePageClusters = clusterConsecutive(capped.map((e, i) => toRowData(e, i + 1)))
+        onePageLastRow = findOldestBeyondCap(ONE_PAGE_HISTORY_CAP)
+      } else {
+        const visible = withMatch.slice(0, HISTORY_VISIBLE_CAP)
+        const allClusters = clusterConsecutive(visible.map((e, i) => toRowData(e, i + 1)))
+        const split = splitClustersByBudget(allClusters, HISTORY_SLIDE1_CAP)
+        slide1Clusters = split.first
+        slide2Clusters = split.rest
+        // 번호는 최종 슬라이드1→슬라이드2 순서로 다시 매긴다 (클러스터 경계에 맞춰 25행에서
+        // 살짝 못 미칠 수도 있으므로 원래 인덱스가 아니라 실제 출력 순서 기준으로).
+        let seq = 0
+        for (const cl of slide1Clusters) for (const e of cl) e.no = ++seq
+        for (const cl of slide2Clusters) for (const e of cl) e.no = ++seq
+
+        lastRow = findOldestBeyondCap(HISTORY_VISIBLE_CAP)
       }
 
       chunks.push({
@@ -404,6 +439,8 @@ export async function buildCareerZip(templateBuf: Buffer, projectId: number, tit
         slide1Clusters,
         slide2Clusters,
         lastRow,
+        onePageLastRow,
+        onePageClusters,
         itCareerDuration: fmtYearsMonths(itCareer.reduce((s, r) => s + monthsBetween(r.period_start, r.period_end), 0)),
         itCareerRows: itCareer.slice(0, IT_CAREER_CAP).map(r => ({
           period: `${r.period_start ?? ''} ~ ${r.period_end ?? ''}`,
@@ -441,11 +478,86 @@ export async function buildCareerZip(templateBuf: Buffer, projectId: number, tit
       if (patched !== partXml) zip.file(partName, patched)
     }
 
+    if (onePage) {
+      // "1페이지로 압축": 원래 2슬라이드(1/2=유사 감리 실적만, 2/2=실적 나머지+IT경력+자격증)
+      // 중 3개 표가 다 있는 "2/2" 슬라이드만 남기고 나머지는 지운다. 파일 이름 순서에
+      // 기대지 않고 내용(자격증 표가 있는지)으로 판별한다 — buildMultiSlideDeck은 zip에
+      // 남아있는 slideN.xml 파일들만 템플릿으로 보므로, 여기서 미리 걸러두면 이후 콜백은
+      // 항상 "2/2" 레이아웃 하나만 받게 된다.
+      const slideFiles = Object.keys(zip.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
+      for (const sf of slideFiles) {
+        const xml = await zip.file(sf)!.async('string')
+        if (!findTable(xml, CERT_HEADER_MARKERS)) {
+          zip.remove(sf)
+          const relsFile = sf.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels'
+          if (zip.file(relsFile)) zip.remove(relsFile)
+        }
+      }
+    }
+
+    /** IT경력(고정 3행) + 자격증(고정 4행) 표 채우기 — "2/2" 레이아웃(일반 모드의 2번째
+     *  슬라이드, "1페이지로 압축" 모드의 유일한 슬라이드)에서 공통으로 쓴다. */
+    function fillItCareerAndCert(xml: string, tplSlideXml: string, person: PersonChunk): string {
+      xml = applyPlaceholderMap(xml, {
+        '[IT경력]': person.itCareerDuration,
+        '[자격증개수]': String(person.certTotal),
+      })
+      const itCanonical = getRow(tplSlideXml, IT_CAREER_HEADER_MARKERS, 1)
+      const itRowsXml = person.itCareerRows
+        .map(r =>
+          fillSimpleRow(itCanonical, {
+            '[IT경력시작일] ~ [IT경력종료일]': r.period,
+            '[경력]': r.career,
+            '[담당업무]': r.duty,
+            '[경력근거]': r.basis,
+          })
+        )
+        .join('')
+      xml = replaceDataRows(xml, IT_CAREER_HEADER_MARKERS, itRowsXml, 0)
+
+      const certCanonical = getRow(tplSlideXml, CERT_HEADER_MARKERS, 1)
+      const certRowsXml = person.certRows
+        .map(r =>
+          fillSimpleRow(certCanonical, {
+            '[자격증명]': r.name,
+            '[발급처]': r.issuer,
+            '[구분]': r.type,
+            '[관련분야]': r.field,
+          })
+        )
+        .join('')
+      return replaceDataRows(xml, CERT_HEADER_MARKERS, certRowsXml, 0)
+    }
+
     await buildMultiSlideDeck(
       zip,
       (tplSlideXml, person: PersonChunk, templateIndex) => {
         const personMap = { ...commonMap, '[이름]': person.name, '[담당분야]': person.domain }
         let xml = applyPlaceholderMap(tplSlideXml, personMap)
+
+        if (onePage) {
+          // 유사 감리 실적 표: 행 높이/글자 크기는 템플릿 원본 그대로 두고 상위
+          // ONE_PAGE_HISTORY_CAP건(+ 넘으면 "중간 생략" 구분행 + 총건수 요약행)을 그냥
+          // 채운다(2026-09-05 사용자 확인 — "그냥 안내선 아래로 내려가도 되니까 그냥
+          // 표시해... 나중에 고치면 됨" — 자동으로 줄여서 맞추지 않고, 표가 원래 자리보다
+          // 아래로 늘어나는 건 감수한다. 다만 "유사감리실적중간생략" 구분행+요약행은
+          // 일반 모드와 동일하게 유지).
+          const found = findTable(tplSlideXml, HISTORY_HEADER_MARKERS)
+          if (!found) throw new Error('유사 감리 실적 표를 찾지 못했습니다')
+          const canonical = found.rows[found.headerIdx + 1]
+          let rowsXml = person.onePageClusters.map(cl => fillHistoryCluster(canonical, cl)).join('')
+          if (person.onePageLastRow) {
+            const dividerRow = found.rows[found.rows.length - 2]
+            rowsXml += dividerRow + fillHistoryCluster(canonical, [person.onePageLastRow])
+          }
+          xml = replaceDataRows(xml, HISTORY_HEADER_MARKERS, rowsXml, 0)
+
+          // 이 슬라이드는 원래 "2/2"(2장 중 두 번째)였다는 표시가 제목 옆에 고정 텍스트로
+          // 박혀있는데, 1페이지 모드는 슬라이드가 이거 하나뿐이라 의미가 없어 지운다.
+          xml = xml.replace(/<a:r>((?:(?!<\/a:r>)[\s\S])*?)<a:t(?:\s[^>]*)?>\(2\/2\)<\/a:t><\/a:r>/, '')
+
+          return fillItCareerAndCert(xml, tplSlideXml, person)
+        }
 
         if (templateIndex === 0) {
           // 1/2: 감리실적 총건수 + 유사 감리 실적 표 앞 25행
@@ -468,37 +580,7 @@ export async function buildCareerZip(templateBuf: Buffer, projectId: number, tit
         const trailing = person.lastRow ? dividerRow + lastRowXml : ''
         xml = replaceDataRows(xml, HISTORY_HEADER_MARKERS, slide2RowsXml + trailing, 0)
 
-        xml = applyPlaceholderMap(xml, {
-          '[IT경력]': person.itCareerDuration,
-          '[자격증개수]': String(person.certTotal),
-        })
-        const itCanonical = getRow(tplSlideXml, IT_CAREER_HEADER_MARKERS, 1)
-        const itRowsXml = person.itCareerRows
-          .map(r =>
-            fillSimpleRow(itCanonical, {
-              '[IT경력시작일] ~ [IT경력종료일]': r.period,
-              '[경력]': r.career,
-              '[담당업무]': r.duty,
-              '[경력근거]': r.basis,
-            })
-          )
-          .join('')
-        xml = replaceDataRows(xml, IT_CAREER_HEADER_MARKERS, itRowsXml, 0)
-
-        const certCanonical = getRow(tplSlideXml, CERT_HEADER_MARKERS, 1)
-        const certRowsXml = person.certRows
-          .map(r =>
-            fillSimpleRow(certCanonical, {
-              '[자격증명]': r.name,
-              '[발급처]': r.issuer,
-              '[구분]': r.type,
-              '[관련분야]': r.field,
-            })
-          )
-          .join('')
-        xml = replaceDataRows(xml, CERT_HEADER_MARKERS, certRowsXml, 0)
-
-        return xml
+        return fillItCareerAndCert(xml, tplSlideXml, person)
       },
       chunks
     )
@@ -522,7 +604,8 @@ app.post('/:projectId', async (c) => {
     }
 
     const templateBuf = Buffer.from(await file.arrayBuffer())
-    const { zip, personCount, skipped, projectName } = await buildCareerZip(templateBuf, projectId)
+    const onePage = form.get('onePage') === 'true'
+    const { zip, personCount, skipped, projectName } = await buildCareerZip(templateBuf, projectId, '', onePage)
 
     const outBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } })
     const safeName = projectName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)

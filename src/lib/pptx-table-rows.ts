@@ -29,7 +29,7 @@
  *      계산해서 그 페이지의 안전 높이 예산을 채웁니다 — 단, 원본 템플릿 행 높이보다
  *      더 늘리지는 않습니다(마지막 페이지가 휑하게 늘어나 보이는 것을 방지).
  */
-import { applyPlaceholderMap } from './pptx-runtext.js'
+import { applyPlaceholderMap, withFreshRowId } from './pptx-runtext.js'
 
 export interface ScheduleEntry {
   /** 감리구분: 추가 / 정기 / 검수지원 */
@@ -279,13 +279,13 @@ export function expandScheduleTable(slideXml: string, groups: ScheduleGroup[], f
     if (n === 0) continue
     let first = firstDataRowTpl.replace(rowSpanRe, (_m, a, _n, c) => `${a}${n}${c}`)
     if (dataRowH !== origDataRowH) first = setRowHeight(first, dataRowH)
-    first = applyPlaceholderMap(first, buildEntryMap(g.entries[0], g.name))
+    first = withFreshRowId(applyPlaceholderMap(first, buildEntryMap(g.entries[0], g.name)))
     newDataRowsXml += first
 
     for (let i = 1; i < n; i++) {
       let cont = contRowTpl
       if (dataRowH !== origDataRowH) cont = setRowHeight(cont, dataRowH)
-      cont = applyPlaceholderMap(cont, buildEntryMap(g.entries[i]))
+      cont = withFreshRowId(applyPlaceholderMap(cont, buildEntryMap(g.entries[i])))
       newDataRowsXml += cont
     }
   }

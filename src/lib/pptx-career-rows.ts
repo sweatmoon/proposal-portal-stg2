@@ -29,7 +29,7 @@
  * "번호" 열은 대괄호 플레이스홀더가 아니라 그냥 리터럴 숫자라서, 셀 안 숫자 텍스트를
  * 직접 바꿔치기한다.
  */
-import { applyPlaceholderMap } from './pptx-runtext.js'
+import { applyPlaceholderMap, withFreshRowId } from './pptx-runtext.js'
 
 function esc(v: unknown): string {
   return String(v ?? '')
@@ -87,12 +87,16 @@ function buildProjectNameRuns(entry: HistoryRowData, blackRPr: string, redRPr: s
   )
 }
 
-/** tcPr 맨 마지막의 셀 배경 solidFill(테두리용 solidFill과 달리 </a:tcPr> 바로 앞에 옴)을
- *  hex로 바꾸거나(hex가 null이면) 완전히 지운다(흰 배경). */
+/** tcPr 맨 마지막의 셀 배경(테두리용 solidFill과 달리 </a:tcPr> 바로 앞에 옴)을 hex로
+ *  바꾸거나(hex가 null이면) 완전히 지운다(흰 배경). 원본 템플릿의 기본 배경이 이미
+ *  solidFill(1/2 슬라이드처럼 초록이 기본값인 행)이든 noFill(2/2 슬라이드의 기본 행처럼
+ *  흰 배경인 행)이든 둘 다 대상으로 인식해야 한다 — noFill만 매칭 안 되게 두면 그 행은
+ *  절대 초록으로 안 바뀌는 버그가 생긴다(2026-09-07 발견: 2/2 슬라이드 및 그걸 그대로
+ *  쓰는 1페이지 압축 모드에서 주관기관 매치가 있어도 초록 배경이 전혀 안 붙던 원인). */
 function setCellFill(cellXml: string, hex: string | null): string {
-  const fillRe = /<a:solidFill><a:srgbClr val="[0-9A-Fa-f]{6}"\/><\/a:solidFill>(<\/a:tcPr>)/
+  const fillRe = /(<a:solidFill><a:srgbClr val="[0-9A-Fa-f]{6}"\/><\/a:solidFill>|<a:noFill\/>)(<\/a:tcPr>)/
   if (!fillRe.test(cellXml)) return cellXml
-  const replacement = hex ? `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>$1` : `<a:noFill/>$1`
+  const replacement = hex ? `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>$2` : `<a:noFill/>$2`
   return cellXml.replace(fillRe, replacement)
 }
 
@@ -173,7 +177,7 @@ export function fillHistoryCluster(singleRowTpl: string, entries: HistoryRowData
 
   if (n === 1) {
     const cells = cellsTpl.map((cellTpl, ci) => fillCell(cellTpl, ci, entries[0]))
-    return trOpen + cells.join('') + '</a:tr>'
+    return withFreshRowId(trOpen + cells.join('') + '</a:tr>')
   }
 
   const rowsOut: string[][] = entries.map(() => new Array(cellsTpl.length).fill(''))
@@ -188,10 +192,10 @@ export function fillHistoryCluster(singleRowTpl: string, entries: HistoryRowData
     }
   }
 
-  return rowsOut.map(cells => trOpen + cells.join('') + '</a:tr>').join('')
+  return rowsOut.map(cells => withFreshRowId(trOpen + cells.join('') + '</a:tr>')).join('')
 }
 
 /** 단순 대괄호 플레이스홀더만 있는 행(IT경력/자격증)을 채운다. */
 export function fillSimpleRow(canonicalRow: string, map: Record<string, string>): string {
-  return applyPlaceholderMap(canonicalRow, map)
+  return withFreshRowId(applyPlaceholderMap(canonicalRow, map))
 }
