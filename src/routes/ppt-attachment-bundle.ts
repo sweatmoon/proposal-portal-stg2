@@ -83,6 +83,8 @@ import { buildLocalTaxCertificateZip } from './ppt-local-tax-certificate.js'
 import { buildCorporateRegistryZip } from './ppt-corporate-registry.js'
 import { buildInsuranceEnrollmentZip } from './ppt-insurance-enrollment.js'
 import { buildEmploymentCertificateZip } from './ppt-employment-certificate.js'
+import { buildCareerCertificateZip } from './ppt-career-certificate.js'
+import { buildStaffingStatusZip } from './ppt-staffing-status.js'
 import type { CompanyStampType } from '../lib/nas-client.js'
 import { buildCoverZip } from './ppt-cover.js'
 import { mergeDecksSharingMaster } from '../lib/pptx-merge.js'
@@ -178,6 +180,14 @@ const ATTACHMENT_TYPES: Record<
   employmentCert: {
     label: '재직증명서',
     build: async (buf, projectId, _form, titlePrefix) => (await buildEmploymentCertificateZip(buf, projectId, titlePrefix)).zip,
+  },
+  careerCert: {
+    label: '경력증명서',
+    build: async (buf, projectId, _form, titlePrefix) => (await buildCareerCertificateZip(buf, projectId, titlePrefix)).zip,
+  },
+  staffingStatus: {
+    label: '상근감리원인력현황',
+    build: async (buf, projectId, _form, titlePrefix) => (await buildStaffingStatusZip(buf, projectId, titlePrefix)).zip,
   },
 }
 

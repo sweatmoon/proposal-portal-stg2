@@ -12,7 +12,7 @@
  * 원본 엑셀의 각 증명서 시트가 VLOOKUP + MID로 만들던 표시용 문자열(생년월일 "1979년
  * 02월 20일", 입사일 "2021년 01월 18일" 등)도 이 파일에서 그대로 재현한다.
  */
-import JSZip from 'jszip'
+import { loadSheetRows } from './xlsx-parse.js'
 
 export interface EmployeeRecord {
   name: string
@@ -24,59 +24,12 @@ export interface EmployeeRecord {
   resigned: boolean
 }
 
-function loadSharedStrings(xml: string): string[] {
-  return [...xml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => m[1].replace(/<[^>]+>/g, ''))
-}
-
-/** 시트 이름(예: "직원정보")으로 실제 ppt/xl 파트 경로(xl/worksheets/sheetN.xml)를 찾는다 —
- *  엑셀이 저장될 때마다 시트 순서/번호가 바뀔 수 있어 이름으로 매번 다시 찾아야 한다. */
-async function findSheetPathByName(zip: JSZip, sheetName: string): Promise<string | null> {
-  const workbookXml = await zip.file('xl/workbook.xml')?.async('string')
-  if (!workbookXml) return null
-  const escaped = sheetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const sheetMatch = workbookXml.match(new RegExp(`<sheet[^>]*name="${escaped}"[^>]*r:id="(rId\\d+)"`))
-  if (!sheetMatch) return null
-  const relsXml = await zip.file('xl/_rels/workbook.xml.rels')?.async('string')
-  if (!relsXml) return null
-  const relMatch = relsXml.match(new RegExp(`<Relationship[^>]*Id="${sheetMatch[1]}"[^>]*Target="([^"]+)"`))
-  if (!relMatch) return null
-  return 'xl/' + relMatch[1]
-}
-
-/** 한 <row>...</row> 안의 셀들을 "열 문자(A,B,C...) → 값" 맵으로 만든다. */
-function parseRowCells(rowXml: string, sharedStrings: string[]): Map<string, string> {
-  const map = new Map<string, string>()
-  const cellRe = /<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
-  for (const m of rowXml.matchAll(cellRe)) {
-    const attrs = m[1]
-    const inner = m[2] ?? ''
-    const refMatch = attrs.match(/r="([A-Z]+)\d+"/)
-    if (!refMatch) continue
-    const vMatch = inner.match(/<v>([\s\S]*?)<\/v>/)
-    if (!vMatch) continue
-    const typeMatch = attrs.match(/t="(\w+)"/)
-    let value = vMatch[1]
-    if (typeMatch && typeMatch[1] === 's') value = sharedStrings[Number(value)] ?? ''
-    map.set(refMatch[1], value)
-  }
-  return map
-}
-
 /** 엑셀 buffer를 받아 "직원정보" 시트를 이름 → EmployeeRecord 맵으로 파싱한다. */
 export async function loadEmployeeDirectory(xlsxBuf: Buffer): Promise<Map<string, EmployeeRecord>> {
-  const zip = await JSZip.loadAsync(xlsxBuf)
-  const sheetPath = await findSheetPathByName(zip, '직원정보')
-  if (!sheetPath) throw new Error('재직증명서 발행파일에서 "직원정보" 시트를 찾지 못했습니다')
-
-  const [sheetXml, sharedStringsXml] = await Promise.all([
-    zip.file(sheetPath)!.async('string'),
-    zip.file('xl/sharedStrings.xml')?.async('string') ?? Promise.resolve(''),
-  ])
-  const sharedStrings = sharedStringsXml ? loadSharedStrings(sharedStringsXml) : []
+  const rows = await loadSheetRows(xlsxBuf, '직원정보')
 
   const result = new Map<string, EmployeeRecord>()
-  for (const rowMatch of sheetXml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) {
-    const cells = parseRowCells(rowMatch[1], sharedStrings)
+  for (const cells of rows) {
     const name = cells.get('A')
     if (!name || name === '외부인력이름') continue // 헤더 행 스킵
     result.set(name, {

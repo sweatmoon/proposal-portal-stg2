@@ -243,6 +243,33 @@ export async function fetchEmploymentCertificateSourceXlsx(): Promise<Buffer | n
   })
 }
 
+// 상근인력현황 .xlsx가 있는 폴더 — 파일명이 완전히 같은 날짜로 "상근인력현황_YYMMDD.xlsx"
+// (전체 인력, 구분 필터링 전)와 "상근인력현황(감리원만)_YYMMDD.xlsx"(이미 감리원만 걸러둔
+// 별도 파일) 두 종류가 같이 있다(2026-09-04 확인). 이 기능은 우리가 직접 구분(I열)을
+// 필터링하는 게 목적이라 반드시 "필터링 전" 파일("상근인력현황_날짜.xlsx" 형식, 괄호 없는
+// 파일명)만 골라야 한다 — "(감리원만)" 같은 접미사가 붙은 변형은 제외.
+const STAFFING_STATUS_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/02.제안/07.상근인력보유현황'
+
+/** NAS에서 상근인력현황 중 "상근인력현황_날짜.xlsx" 형식(괄호 접미사 없는 것)만 대상으로
+ *  파일이름 기준 가장 최신 것을 받아옵니다. 못 찾으면 null. */
+export async function fetchStaffingStatusXlsx(): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 상근인력현황 조회를 건너뜁니다.')
+    return null
+  }
+  return withNasRetry('상근인력현황 조회', async sid => {
+    const files = await listFolder(sid, STAFFING_STATUS_FOLDER)
+    const latest = files
+      .filter(f => !f.isdir && /^상근인력현황_\d+\.xlsx$/i.test(f.name))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
+      .pop()
+    if (!latest) throw new Error('폴더에서 "상근인력현황_날짜.xlsx" 형식의 파일을 찾지 못함: ' + STAFFING_STATUS_FOLDER)
+    const buf = await downloadFile(sid, `${STAFFING_STATUS_FOLDER}/${latest.name}`)
+    if (!buf) throw new Error('다운로드 실패: ' + latest.name)
+    return buf
+  })
+}
+
 // "원본대조필"/"사실과상위없음" 도장 이미지가 있는 폴더 — 같은 도장이 배경 제거 버전으로
 // 여러 장(_1~_5) 들어있는데, 어느 걸 골라도 상관없어서(2026-09-03 사용자 확인: "아무거나")
 // 이름순으로 첫 번째 것만 쓴다.
