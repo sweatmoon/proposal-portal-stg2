@@ -61,8 +61,6 @@ const app = new Hono()
 const PAGE_TITLE = '투입 감리원별 실적 및 경력'
 const HISTORY_VISIBLE_CAP = 35
 const HISTORY_SLIDE1_CAP = 25
-const IT_CAREER_CAP = 3
-const CERT_CAP = 4
 // "1페이지로 압축" 옵션(2026-09-05 사용자 확인 — "감리경력을 줄이고 나머지 감리외경력과
 // 자격증을 한 페이지에 몰아넣은 1페이지로 뽑는 기능")에서 보여줄 유사 감리 실적 건수.
 // 일단 15건으로 시작 — 필요하면 이 값만 바꾸면 됨.
@@ -442,14 +440,14 @@ export async function buildCareerZip(
         onePageLastRow,
         onePageClusters,
         itCareerDuration: fmtYearsMonths(itCareer.reduce((s, r) => s + monthsBetween(r.period_start, r.period_end), 0)),
-        itCareerRows: itCareer.slice(0, IT_CAREER_CAP).map(r => ({
+        itCareerRows: itCareer.map(r => ({
           period: `${r.period_start ?? ''} ~ ${r.period_end ?? ''}`,
           career: r.client_org ?? '',
           duty: r.project_name,
           basis: r.domain ?? '',
         })),
         certTotal: certs.length,
-        certRows: certs.slice(0, CERT_CAP).map(r => ({
+        certRows: certs.map(r => ({
           name: r.cert_name,
           issuer: r.issuer ?? '',
           type: r.is_national ? '국가공인' : '민간',
