@@ -32,7 +32,7 @@ app.post('/', async (c) => {
     return c.json({ ok: false, error: `파싱 실패: ${String(e)}` }, 422)
   }
 
-  const { personnel, certifications, audit_history, it_career } = parsed
+  const { personnel, certifications, audit_history, it_career, project_career } = parsed
   if (!personnel.name)
     return c.json({ ok: false, error: '성명을 파싱할 수 없습니다. 인력 프로파일 HTML인지 확인하세요' }, 422)
 
@@ -97,6 +97,7 @@ app.post('/', async (c) => {
       await client.query('DELETE FROM personnel_certifications WHERE personnel_id = $1', [pid])
       await client.query('DELETE FROM personnel_audit_history WHERE personnel_id = $1', [pid])
       await client.query('DELETE FROM personnel_it_career WHERE personnel_id = $1', [pid])
+      await client.query('DELETE FROM personnel_project_career WHERE personnel_id = $1', [pid])
 
       // 3. 자격증
       for (const cert of certifications) {
@@ -158,16 +159,32 @@ app.post('/', async (c) => {
         }
       }
 
-      // 5. IT 경력
-      for (const career of it_career) {
+      // 5. IT 경력 (감리 이외의 IT 경력)
+      for (const ic of it_career) {
         await client.query(`
           INSERT INTO personnel_it_career
-            (personnel_id, period_start, period_end, project_name, client_org, domain, role, company, remarks)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        `, [pid, career.period_start, career.period_end, career.project_name, career.client_org, career.domain, career.role, career.company, career.remarks])
+            (personnel_id, period_start, period_end, career, duty, basis)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [pid, ic.period_start, ic.period_end, ic.career, ic.duty, ic.basis])
       }
 
-      return { personnel_id: pid, name: personnel.name, certifications: certifications.length, audit_history: audit_history.length, it_career: it_career.length }
+      // 6. 프로젝트 및 기타 경력
+      for (const pc of project_career) {
+        await client.query(`
+          INSERT INTO personnel_project_career
+            (personnel_id, year_range, project_name, client_org, domain, role, company, remarks)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        `, [pid, pc.year_range, pc.project_name, pc.client_org, pc.domain, pc.role, pc.company, pc.remarks])
+      }
+
+      return {
+        personnel_id: pid,
+        name: personnel.name,
+        certifications: certifications.length,
+        audit_history: audit_history.length,
+        it_career: it_career.length,
+        project_career: project_career.length,
+      }
     })
 
     return c.json({ ok: true, message: `인력 "${personnel.name}" 저장 완료`, data: result })

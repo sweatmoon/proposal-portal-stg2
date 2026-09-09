@@ -200,14 +200,12 @@ const erdHtml = `<!DOCTYPE html>
           <text x="458" y="298" fill="#fb923c" font-size="10" text-anchor="end">INT FK</text>
           <text x="282" y="316" fill="#e2e8f0" font-size="11">period_start/end</text>
           <text x="458" y="316" fill="#34d399" font-size="10" text-anchor="end">TEXT</text>
-          <text x="282" y="334" fill="#e2e8f0" font-size="11">project_name</text>
+          <text x="282" y="334" fill="#e2e8f0" font-size="11">career</text>
           <text x="458" y="334" fill="#34d399" font-size="10" text-anchor="end">TEXT</text>
-          <text x="282" y="352" fill="#e2e8f0" font-size="11">client_org</text>
+          <text x="282" y="352" fill="#e2e8f0" font-size="11">duty</text>
           <text x="458" y="352" fill="#34d399" font-size="10" text-anchor="end">TEXT</text>
-          <text x="282" y="370" fill="#e2e8f0" font-size="11">domain / role</text>
+          <text x="282" y="370" fill="#e2e8f0" font-size="11">basis</text>
           <text x="458" y="370" fill="#34d399" font-size="10" text-anchor="end">TEXT</text>
-          <text x="282" y="388" fill="#e2e8f0" font-size="11">company / remarks</text>
-          <text x="458" y="388" fill="#34d399" font-size="10" text-anchor="end">TEXT</text>
         </g>
 
         <!-- ────────────────────────────────
@@ -527,12 +525,9 @@ const erdHtml = `<!DOCTYPE html>
         <div class="erd-col fk"><span class="col-name">🔗 personnel_id</span><span class="col-type">INT FK</span></div>
         <div class="erd-col"><span class="col-name">period_start</span><span class="col-type">TEXT</span></div>
         <div class="erd-col"><span class="col-name">period_end</span><span class="col-type">TEXT</span></div>
-        <div class="erd-col"><span class="col-name">project_name</span><span class="col-type">TEXT</span></div>
-        <div class="erd-col"><span class="col-name">client_org</span><span class="col-type">TEXT</span></div>
-        <div class="erd-col"><span class="col-name">domain</span><span class="col-type">TEXT</span></div>
-        <div class="erd-col"><span class="col-name">role</span><span class="col-type">TEXT</span></div>
-        <div class="erd-col"><span class="col-name">company</span><span class="col-type">TEXT</span></div>
-        <div class="erd-col"><span class="col-name">remarks</span><span class="col-type">TEXT</span></div>
+        <div class="erd-col"><span class="col-name">career</span><span class="col-type">TEXT</span></div>
+        <div class="erd-col"><span class="col-name">duty</span><span class="col-type">TEXT</span></div>
+        <div class="erd-col"><span class="col-name">basis</span><span class="col-type">TEXT</span></div>
         <div class="erd-col"><span class="col-name">created_at</span><span class="col-type">TEXT</span></div>
       </div>
     </div>
