@@ -1694,41 +1694,12 @@ app.get('/ppt-generate', (c) => {
   const body = `
   <div class="p-6 md:p-8 max-w-5xl" id="pptGenRoot">
     <h1 class="text-2xl font-bold text-slate-800 flex items-center gap-2 mb-1">
-      <i class="fas fa-file-powerpoint text-indigo-500"></i> 사업별 PPT 생성
+      <i class="fas fa-file-powerpoint text-indigo-500"></i> 첨부 생성
     </h1>
     <p class="text-sm text-slate-500 mb-6">
-      DB에 적재된 사업 목록입니다. 아래에서 첨부 템플릿을 먼저 업로드한 뒤,
-      원하는 사업의 "PPT 생성" 버튼을 누르면 템플릿의 플레이스홀더가 해당 사업 데이터로
-      치환된 pptx 파일이 바로 다운로드됩니다.
+      DB에 적재된 사업 목록입니다. 원하는 사업의 "첨부PPT 생성" 버튼을 눌러 첨부 항목을
+      선택하고 템플릿을 업로드하면, 해당 사업 데이터로 채워진 pptx 파일이 바로 다운로드됩니다.
     </p>
-
-    <!-- 첨부 템플릿 업로드 -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 mb-6 space-y-5">
-      <div>
-        <h2 class="text-sm font-bold text-slate-700 mb-1 flex items-center gap-2">
-          <i class="fas fa-paperclip text-amber-500"></i> 첨부 템플릿 (범용 — {{TOKEN}} 방식)
-        </h2>
-        <p class="text-xs text-slate-400 mb-3">
-          이 파일은 서버에 저장되지 않고, "PPT 생성" 클릭 시에만 그 요청 처리 중에 잠깐 사용되고 폐기됩니다.
-        </p>
-        <input id="tplFileInput" type="file" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-               class="block w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4
-                      file:rounded-lg file:border-0 file:text-sm file:font-semibold
-                      file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" />
-        <div id="tplStatus" class="mt-2 text-xs font-medium text-slate-400">선택된 템플릿 없음</div>
-
-        <details class="mt-4">
-          <summary class="text-xs text-indigo-600 cursor-pointer font-medium">지원되는 플레이스홀더 보기</summary>
-          <div class="mt-2 text-xs text-slate-500 bg-slate-50 rounded-lg p-3 leading-relaxed font-mono">
-            {{PROJECT_NAME}} {{CLIENT_ORG}} {{BID_NOTICE_NO}} {{REGISTERED_YM}} {{BID_DEADLINE}}<br>
-            {{BID_AMOUNT}} {{REQUIRED_MD}} {{PROPOSED_MD}} {{WRITER}} {{DIRECTOR}}<br>
-            {{TARGET_PROJECT_NAME}} {{TARGET_CLIENT_ORG}} {{TARGET_CONTRACTOR}}<br>
-            {{TARGET_PERIOD_START}} {{TARGET_PERIOD_END}}
-          </div>
-        </details>
-      </div>
-
-    </div>
 
     ${bundleWidget.html}
 
@@ -1749,31 +1720,18 @@ app.get('/ppt-generate', (c) => {
             <th class="px-4 py-3 text-center font-semibold text-slate-500">등록연월</th>
             <th class="px-4 py-3 text-center font-semibold text-slate-500">마감일</th>
             <th class="px-4 py-3 text-center font-semibold text-slate-500">상태</th>
-            <th class="px-4 py-3 text-center font-semibold text-slate-500">PPT</th>
             <!-- [ppt-portal 추가 기능] 열 하나 -->
             <th class="px-4 py-3 text-center font-semibold text-slate-500">첨부PPT</th>
           </tr>
         </thead>
         <tbody id="projectListBody">
-          <tr><td colspan="7" class="px-4 py-10 text-center text-slate-400">불러오는 중...</td></tr>
+          <tr><td colspan="6" class="px-4 py-10 text-center text-slate-400">불러오는 중...</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
   <script>
-  let templateFile = null
-
-  const tplInput  = document.getElementById('tplFileInput')
-  const tplStatus = document.getElementById('tplStatus')
-  tplInput.addEventListener('change', () => {
-    templateFile = tplInput.files && tplInput.files[0] ? tplInput.files[0] : null
-    tplStatus.textContent = templateFile
-      ? '✅ 선택됨: ' + templateFile.name + ' (' + Math.round(templateFile.size / 1024) + 'KB) — 이 세션 동안만 메모리에 보관됩니다'
-      : '선택된 템플릿 없음'
-    tplStatus.className = templateFile ? 'mt-2 text-xs font-medium text-emerald-600' : 'mt-2 text-xs font-medium text-slate-400'
-  })
-
   // [ppt-portal 추가 기능] "첨부PPT 생성" 위젯의 JS(BUNDLE_ITEM_DEFS, openBundleModal,
   // confirmGenerateBundle 등)는 여기 없습니다 — 이 <script> 태그와 절대 안 섞이도록
   // src/views/attachment-bundle-widget.ts 안에서 "별도의" <script> 태그로 아래쪽에
@@ -1784,7 +1742,7 @@ app.get('/ppt-generate', (c) => {
 
   async function loadProjects(search) {
     const tbody = document.getElementById('projectListBody')
-    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-slate-400">불러오는 중...</td></tr>'
+    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-10 text-center text-slate-400">불러오는 중...</td></tr>'
     try {
       const url = '/api/audit-projects' + (search ? '?search=' + encodeURIComponent(search) : '')
       const r = await fetch(url)
@@ -1792,7 +1750,7 @@ app.get('/ppt-generate', (c) => {
       if (!j.ok) throw new Error(j.error || '조회 실패')
       const rows = j.data || []
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-slate-400">등록된 사업이 없습니다</td></tr>'
+        tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-10 text-center text-slate-400">등록된 사업이 없습니다</td></tr>'
         return
       }
       tbody.innerHTML = rows.map(p => \`
@@ -1803,12 +1761,6 @@ app.get('/ppt-generate', (c) => {
           <td class="px-4 py-3 text-center text-slate-600">\${escapeHtml(p.bid_deadline || '-')}</td>
           <td class="px-4 py-3 text-center">
             <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">\${escapeHtml(p.proposal_status || '-')}</span>
-          </td>
-          <td class="px-4 py-3 text-center">
-            <button onclick="generatePpt(\${p.id}, this)"
-              class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
-              <i class="fas fa-download"></i> PPT 생성
-            </button>
           </td>
           <!-- ▼ [ppt-portal 추가 기능] 여기 버튼 셀 하나만 이 테이블의 유일한 추가 지점입니다.
                openBundleModal()은 attachment-bundle-widget.ts의 별도 스크립트가 전역에 등록합니다. -->
@@ -1821,45 +1773,12 @@ app.get('/ppt-generate', (c) => {
           <!-- ▲ [ppt-portal 추가 기능] 끝 -->
         </tr>\`).join('')
     } catch (e) {
-      tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-red-500">' + escapeHtml(e.message) + '</td></tr>'
+      tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-10 text-center text-red-500">' + escapeHtml(e.message) + '</td></tr>'
     }
   }
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))
-  }
-
-  async function generatePpt(id, btnEl) {
-    if (!templateFile) {
-      alert('먼저 첨부 템플릿(.pptx)을 업로드해주세요.')
-      return
-    }
-    const originalHtml = btnEl.innerHTML
-    btnEl.disabled = true
-    btnEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 생성 중...'
-    try {
-      const fd = new FormData()
-      fd.append('template', templateFile)
-      const r = await fetch('/api/ppt-generate/' + id, { method: 'POST', body: fd })
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}))
-        throw new Error(j.error || ('생성 실패 (' + r.status + ')'))
-      }
-      const blob = await r.blob()
-      const cd = r.headers.get('Content-Disposition') || ''
-      const m = cd.match(/filename\\*?=["']?(?:UTF-8'')?([^"';]+)/i)
-      const filename = m ? decodeURIComponent(m[1]) : ('proposal_' + id + '.pptx')
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = filename
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      alert('PPT 생성 실패: ' + e.message)
-    } finally {
-      btnEl.disabled = false
-      btnEl.innerHTML = originalHtml
-    }
   }
 
   let searchTimer
@@ -1877,7 +1796,7 @@ app.get('/ppt-generate', (c) => {
   <script>${bundleWidget.script}</script>
   <!-- ▲ [ppt-portal 추가 기능] 끝 -->
   `
-  return c.html(layout('사업별 PPT 생성', body, 'ppt-generate'))
+  return c.html(layout('첨부 생성', body, 'ppt-generate'))
 })
 
 // ── PPT 템플릿 관리 페이지 ─────────────────────────────────────

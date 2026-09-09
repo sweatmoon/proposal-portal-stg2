@@ -204,6 +204,23 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
         <div id="bundleExtraList" class="p-3 space-y-2 overflow-y-auto flex-1 min-h-0"></div>
       </div>
     </div>
+
+    <!-- 생성 결과 로그 모달 — 항목별로 성공/실패와 실패 사유를 보여준다(2026-09-09
+         사용자 확인 — "제대로 생성됐는지 어떤 부분이 왜 생성이 안됐는지"). 항목 하나가
+         실패해도(NAS 연결 실패 등) 전체 생성을 막지 않고 그 항목만 빼고 계속 진행하므로,
+         부분 성공일 때도 이 모달로 어떤 게 빠졌는지 알 수 있다. -->
+    <div id="bundleResultModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col">
+        <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <h3 id="bundleResultTitle" class="font-bold text-slate-800"><i class="fas fa-clipboard-check mr-2 text-indigo-500"></i>첨부PPT 생성 결과</h3>
+          <button onclick="closeBundleResultModal()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="bundleResultBody" class="px-6 py-4 overflow-y-auto space-y-1.5 flex-1 min-h-0"></div>
+        <div class="px-6 py-3 border-t border-slate-100 flex justify-end flex-shrink-0">
+          <button onclick="closeBundleResultModal()" class="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">확인</button>
+        </div>
+      </div>
+    </div>
     <!-- ▲▲▲ [ppt-portal 추가 기능] 첨부PPT 위젯 HTML 끝 ▲▲▲ -->
   `
 
@@ -591,6 +608,43 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     document.getElementById('bundleModal').classList.add('hidden')
   }
 
+  function closeBundleResultModal() {
+    document.getElementById('bundleResultModal').classList.add('hidden')
+  }
+
+  /** 생성 결과 로그 모달을 채워서 연다. log는 [{id,label,ok,error?}] — 서버가
+   *  X-Generation-Log 헤더(성공 시) 또는 JSON 응답의 log 필드(전체 실패 시)로 준다.
+   *  fatalError가 있으면(예: 표지 자체가 없어서 아예 못 만든 경우) 맨 위에 따로 보여준다. */
+  function renderBundleResult(log, fatalError) {
+    const failCount = (log || []).filter(x => !x.ok).length
+    const okCount = (log || []).filter(x => x.ok).length
+    document.getElementById('bundleResultTitle').innerHTML = fatalError
+      ? '<i class="fas fa-circle-exclamation mr-2 text-red-500"></i>첨부PPT 생성 실패'
+      : (failCount > 0
+          ? '<i class="fas fa-triangle-exclamation mr-2 text-amber-500"></i>첨부PPT 생성 완료 (일부 실패)'
+          : '<i class="fas fa-circle-check mr-2 text-emerald-500"></i>첨부PPT 생성 완료')
+
+    let html = ''
+    if (fatalError) {
+      html += \`<div class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">\${_bundleEscapeHtml(fatalError)}</div>\`
+    }
+    if (!fatalError && okCount > 0) {
+      html += \`<div class="text-xs text-slate-400 mb-1">성공 \${okCount}건\${failCount > 0 ? (' · 실패 ' + failCount + '건') : ''}</div>\`
+    }
+    html += (log || []).map(item => item.ok
+      ? \`<div class="text-sm bg-emerald-50 text-emerald-700 rounded-lg px-3 py-2 flex items-center gap-2">
+           <i class="fas fa-check-circle"></i> \${_bundleEscapeHtml(item.label)}
+         </div>\`
+      : \`<div class="text-sm bg-red-50 text-red-600 rounded-lg px-3 py-2">
+           <div class="flex items-center gap-2 font-medium"><i class="fas fa-times-circle"></i> \${_bundleEscapeHtml(item.label)}</div>
+           <div class="text-xs text-red-500 mt-0.5 ml-6">\${_bundleEscapeHtml(item.error || '알 수 없는 오류')}</div>
+         </div>\`
+    ).join('')
+
+    document.getElementById('bundleResultBody').innerHTML = html || '<div class="text-sm text-slate-400">표시할 항목이 없습니다.</div>'
+    document.getElementById('bundleResultModal').classList.remove('hidden')
+  }
+
   async function confirmGenerateBundle() {
     const id = bundleProjectId
     const btnEl = bundleBtnEl
@@ -646,7 +700,13 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       const r = await fetch('/api/ppt-attachment-bundle/' + id, { method: 'POST', body: fd })
       if (!r.ok) {
         const j = await r.json().catch(() => ({}))
-        throw new Error(j.error || ('생성 실패 (' + r.status + ')'))
+        renderBundleResult(j.log || [], j.error || ('생성 실패 (' + r.status + ')'))
+        return
+      }
+      const logHeader = r.headers.get('X-Generation-Log')
+      let log = []
+      if (logHeader) {
+        try { log = JSON.parse(decodeURIComponent(logHeader)) } catch {}
       }
       const blob = await r.blob()
       const cd = r.headers.get('Content-Disposition') || ''
@@ -657,6 +717,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       a.href = url; a.download = filename
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
+      renderBundleResult(log, null)
     } catch (e) {
       alert('첨부PPT 생성 실패: ' + e.message)
     } finally {
