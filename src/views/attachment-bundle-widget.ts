@@ -188,20 +188,29 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
         </div>
       </div>
 
-      <!-- 추가서류 패널 — "추가서류" 버튼을 누르면 본 모달 오른쪽에 나타난다. 여기 카드를
-           왼쪽 항목 목록으로 드래그하면 그 항목이 목록에 추가되고 자동으로 체크되며,
-           반대로 왼쪽 목록의 항목을 이 패널로 드래그하면 목록에서 빠진다(2026-09-04
-           사용자 확인 — "왼쪽에서 오른쪽으로도 드래그가 되게"). 크기는 왼쪽 모달과
-           맞춰 큼지막한 고정 크기로 두고(항목 수에 따라 커지거나 작아지지 않음),
-           카드는 가나다순으로 정렬한다. -->
-      <div id="bundleExtraPanel" class="hidden bg-white rounded-2xl shadow-xl w-96 h-[640px] flex flex-col"
+      <!-- 추가서류 패널 — "추가서류" 버튼을 누르면 본 모달 오른쪽에 두 개(01.회사/02.제안)로
+           나뉘어 나타난다(2026-09-09 사용자 확인 — "왼쪽은 01.회사 오른쪽은 02.제안").
+           본 모달(max-w-lg)과 합쳐서 한 화면에 다 들어오도록 패널 하나당 폭을 좁게(w-64)
+           둔다. 카드를 왼쪽 항목 목록으로 드래그(또는 체크)하면 그 항목이 목록에
+           추가되고 자동으로 체크되며, 반대로 왼쪽 목록의 항목을 두 패널 중 아무 데나
+           드래그하면 목록에서 빠진다(2026-09-04 사용자 확인 — "왼쪽에서 오른쪽으로도
+           드래그가 되게" — 어느 패널로 돌려놔도 상관없이 원래 속한 카테고리 쪽에 다시
+           나타난다). 카드는 각 카테고리 안에서 가나다순으로 정렬한다. -->
+      <div id="bundleExtraPanelCompany" class="hidden bg-white rounded-2xl shadow-xl w-64 h-[640px] flex flex-col flex-shrink-0"
            ondragover="event.preventDefault()" ondrop="bundleExtraPanelDrop(event)">
         <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
-          <h4 class="font-bold text-slate-700 text-sm"><i class="fas fa-layer-group mr-1.5 text-indigo-400"></i>추가서류</h4>
+          <h4 class="font-bold text-slate-700 text-sm"><i class="fas fa-building mr-1.5 text-indigo-400"></i>01.회사</h4>
           <button onclick="toggleExtraPanel()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
         </div>
-        <p class="px-4 pt-3 text-xs text-slate-400 flex-shrink-0">왼쪽 목록과 이 패널 사이로 서로 드래그해서 넣고 뺄 수 있습니다.</p>
-        <div id="bundleExtraList" class="p-3 space-y-2 overflow-y-auto flex-1 min-h-0"></div>
+        <div id="bundleExtraListCompany" class="p-3 space-y-2 overflow-y-auto flex-1 min-h-0"></div>
+      </div>
+      <div id="bundleExtraPanelProposal" class="hidden bg-white rounded-2xl shadow-xl w-64 h-[640px] flex flex-col flex-shrink-0"
+           ondragover="event.preventDefault()" ondrop="bundleExtraPanelDrop(event)">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <h4 class="font-bold text-slate-700 text-sm"><i class="fas fa-clipboard-list mr-1.5 text-indigo-400"></i>02.제안</h4>
+          <button onclick="toggleExtraPanel()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="bundleExtraListProposal" class="p-3 space-y-2 overflow-y-auto flex-1 min-h-0"></div>
       </div>
     </div>
 
@@ -244,19 +253,21 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   // 되므로(2026-09-03 사용자 확인 — "전부 범용(도장o) 쓸 거임") 같은 templateGroup을
   // 준다. templateGroup이 있으면 templateLabel은 무시되고 TEMPLATE_GROUPS의 label을 쓴다.
   // label(체크박스·표지 목차에 쓰는 실제 항목명)은 항상 항목별로 따로 둔다.
+  // category: 추가서류 패널을 "01.회사"/"02.제안" 둘로 나누는 기준(2026-09-09 사용자
+  // 확인) — 기본 3종(CORE_IDS)은 애초에 추가서류 패널에 안 보이므로 category가 없다.
   const BUNDLE_ITEM_DEFS = [
     { id: 'schedule',      label: '감리원 일정 현황표', icon: 'fa-calendar-check' },
     { id: 'career',        label: '투입 감리원별 실적 및 경력', icon: 'fa-id-card' },
     { id: 'consent',       label: '비상근 감리원 참여 동의서', icon: 'fa-file-signature' },
-    { id: 'financial',     label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿(도장X)' },
-    { id: 'bizreg',        label: '사업자등록증', icon: 'fa-id-badge', templateGroup: 'stamped' },
-    { id: 'taxcert',       label: '국세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
-    { id: 'localtaxcert',  label: '지방세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped' },
-    { id: 'corpregistry',  label: '법인등기부등본', icon: 'fa-building', templateGroup: 'stamped' },
-    { id: 'insurance',     label: '4대보험 가입확인서', icon: 'fa-notes-medical', templateGroup: 'stamped' },
-    { id: 'employmentCert', label: '재직증명서', icon: 'fa-file-contract' },
-    { id: 'careerCert',     label: '경력증명서', icon: 'fa-file-contract' },
-    { id: 'staffingStatus', label: '상근감리원인력현황', icon: 'fa-users' },
+    { id: 'financial',     label: '표준재무제표', icon: 'fa-file-invoice-dollar', templateLabel: '범용 템플릿(도장X)', category: 'company' },
+    { id: 'bizreg',        label: '사업자등록증', icon: 'fa-id-badge', templateGroup: 'stamped', category: 'company' },
+    { id: 'taxcert',       label: '국세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped', category: 'company' },
+    { id: 'localtaxcert',  label: '지방세 납세증명서', icon: 'fa-file-invoice', templateGroup: 'stamped', category: 'company' },
+    { id: 'corpregistry',  label: '법인등기부등본', icon: 'fa-building', templateGroup: 'stamped', category: 'company' },
+    { id: 'insurance',     label: '4대보험 가입확인서', icon: 'fa-notes-medical', templateGroup: 'stamped', category: 'company' },
+    { id: 'employmentCert', label: '재직증명서', icon: 'fa-file-contract', category: 'proposal' },
+    { id: 'careerCert',     label: '경력증명서', icon: 'fa-file-contract', category: 'proposal' },
+    { id: 'staffingStatus', label: '상근감리원인력현황', icon: 'fa-users', category: 'proposal' },
   ]
   // templateGroup으로 묶이는 항목들이 공유하는 템플릿 업로드 슬롯 정의.
   const TEMPLATE_GROUPS = [
@@ -484,10 +495,12 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     bundleDragFromExtra = false
   }
 
-  // ── 추가서류 패널 (기본 3종 외 항목들 — 드래그해서 왼쪽 목록에 넣는다) ──────────
+  // ── 추가서류 패널 (기본 3종 외 항목들 — "01.회사"/"02.제안" 둘로 나눠서 드래그(또는
+  // 체크)해 왼쪽 목록에 넣는다, 2026-09-09 사용자 확인) ──────────────────────────
   function toggleExtraPanel() {
     bundleExtraPanelOpen = !bundleExtraPanelOpen
-    document.getElementById('bundleExtraPanel').classList.toggle('hidden', !bundleExtraPanelOpen)
+    document.getElementById('bundleExtraPanelCompany').classList.toggle('hidden', !bundleExtraPanelOpen)
+    document.getElementById('bundleExtraPanelProposal').classList.toggle('hidden', !bundleExtraPanelOpen)
     const icon = document.getElementById('bundleExtraToggleIcon')
     icon.classList.toggle('fa-chevron-right', !bundleExtraPanelOpen)
     icon.classList.toggle('fa-chevron-left', bundleExtraPanelOpen)
@@ -495,27 +508,31 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
   }
 
   function renderExtraPanel() {
-    const wrap = document.getElementById('bundleExtraList')
-    // 가나다순 정렬(2026-09-04 사용자 확인) — 아직 목록에 안 들어간(=드래그로 안 넣은)
-    // 항목만 카탈로그에 남는다.
-    const extras = BUNDLE_ITEM_DEFS
-      .filter(d => !CORE_IDS.includes(d.id) && !bundleItemOrder.includes(d.id))
-      .sort((a, b) => a.label.localeCompare(b.label, 'ko'))
-    if (!extras.length) {
-      wrap.innerHTML = '<div class="text-xs text-slate-400 text-center py-6">추가할 서류가 없습니다</div>'
-      return
+    // 가나다순 정렬(2026-09-04 사용자 확인) — 아직 목록에 안 들어간(=드래그/체크로 안
+    // 넣은) 항목만 카탈로그에 남는다. category별로 각자의 패널에 나눠 그린다.
+    const renderInto = (wrapId, category) => {
+      const wrap = document.getElementById(wrapId)
+      const extras = BUNDLE_ITEM_DEFS
+        .filter(d => d.category === category && !bundleItemOrder.includes(d.id))
+        .sort((a, b) => a.label.localeCompare(b.label, 'ko'))
+      if (!extras.length) {
+        wrap.innerHTML = '<div class="text-xs text-slate-400 text-center py-6">추가할 서류가 없습니다</div>'
+        return
+      }
+      wrap.innerHTML = extras.map(d => \`
+        <div class="border border-dashed border-indigo-300 rounded-lg px-3 py-2.5 flex items-center gap-2 bg-indigo-50/30 cursor-grab select-none"
+             draggable="true"
+             ondragstart="bundleExtraDragStart(event,'\${d.id}')"
+             ondragend="bundleExtraDragEnd(event)">
+          <input type="checkbox" class="w-4 h-4 accent-indigo-600 cursor-pointer"
+                 onclick="event.stopPropagation()" onchange="addExtraItemToBundle('\${d.id}')">
+          <i class="fas \${d.icon} text-indigo-400 text-sm"></i>
+          <span class="text-sm text-slate-700 flex-1">\${d.label}</span>
+          <i class="fas fa-grip-vertical text-slate-300 text-xs"></i>
+        </div>\`).join('')
     }
-    wrap.innerHTML = extras.map(d => \`
-      <div class="border border-dashed border-indigo-300 rounded-lg px-3 py-2.5 flex items-center gap-2 bg-indigo-50/30 cursor-grab select-none"
-           draggable="true"
-           ondragstart="bundleExtraDragStart(event,'\${d.id}')"
-           ondragend="bundleExtraDragEnd(event)">
-        <input type="checkbox" class="w-4 h-4 accent-indigo-600 cursor-pointer"
-               onclick="event.stopPropagation()" onchange="addExtraItemToBundle('\${d.id}')">
-        <i class="fas \${d.icon} text-indigo-400 text-sm"></i>
-        <span class="text-sm text-slate-700 flex-1">\${d.label}</span>
-        <i class="fas fa-grip-vertical text-slate-300 text-xs"></i>
-      </div>\`).join('')
+    renderInto('bundleExtraListCompany', 'company')
+    renderInto('bundleExtraListProposal', 'proposal')
   }
 
   /** 추가서류 항목을 왼쪽 목록에 넣고 자동 체크한다 — 드래그(bundleListDrop)와 체크박스
@@ -608,7 +625,8 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(el => { el.checked = false })
     document.getElementById('bundleCareerOnePageWrap').classList.toggle('hidden', !bundleItemChecked['career'])
     document.querySelectorAll('input[name="bundleCareerPageMode"]').forEach(el => { el.checked = el.value === '2page' })
-    document.getElementById('bundleExtraPanel').classList.add('hidden')
+    document.getElementById('bundleExtraPanelCompany').classList.add('hidden')
+    document.getElementById('bundleExtraPanelProposal').classList.add('hidden')
     document.getElementById('bundleExtraToggleIcon').classList.add('fa-chevron-right')
     document.getElementById('bundleExtraToggleIcon').classList.remove('fa-chevron-left')
     renderExtraPanel()
