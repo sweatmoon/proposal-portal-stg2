@@ -42,6 +42,10 @@
  *     경력의 근거)와 1:1로 이름을 맞춰뒀다(2026-09-09 — career/duty/basis). 예전엔
  *     이 표 대신 완전히 다른 섹션인 "3. 프로젝트 및 기타 경력"이 잘못 저장되고
  *     있었다 — src/parsers/personnel-parser.ts 참고.
+ *     이 표가 비어있는 사람(감리 이외의 IT 경력이 원래 없는 경우)은 personnel_project_career
+ *     ("3. 프로젝트 및 기타 경력")로 대신 채운다(2026-09-09 사용자 확인) — 연도는 빼고
+ *     경력=project_name, 담당 업무=domain, 유사 경력의 근거=role만 사용. 이땐 기간 정보가
+ *     없어 기간(년) 열과 "총 OO년 OO개월" 요약은 비워둔다.
  *   ● 보유 자격 현황 (고정 4행): personnel_certifications, id 저장순 앞 4개.
  *     구분은 is_national 1→"국가공인" / 0→"민간".
  *
@@ -93,6 +97,11 @@ interface ItCareerRow {
   career: string
   duty: string | null
   basis: string | null
+}
+interface ProjectCareerRow {
+  project_name: string
+  domain: string | null
+  role: string | null
 }
 interface CertRow {
   cert_name: string
@@ -320,7 +329,7 @@ export async function buildCareerZip(
     }
     const foundIds = [...new Set(personnelIdByName.values())]
 
-    const [allHistory, allItCareer, allCerts] = foundIds.length
+    const [allHistory, allItCareer, allProjectCareer, allCerts] = foundIds.length
       ? await Promise.all([
           query<HistoryRow & { personnel_id: number }>(
             `SELECT personnel_id, audit_yearmonth, project_name, client_org, sector, domain, role, participation_rate
@@ -332,13 +341,19 @@ export async function buildCareerZip(
              FROM personnel_it_career WHERE personnel_id = ANY($1) ORDER BY id ASC`,
             [foundIds]
           ),
+          // "감리 이외의 IT 경력"이 없는 사람만 이걸로 대신 채운다(2026-09-09 사용자 확인).
+          query<ProjectCareerRow & { personnel_id: number }>(
+            `SELECT personnel_id, project_name, domain, role
+             FROM personnel_project_career WHERE personnel_id = ANY($1) ORDER BY id ASC`,
+            [foundIds]
+          ),
           query<CertRow & { personnel_id: number }>(
             `SELECT personnel_id, cert_name, issuer, is_national, related_field
              FROM personnel_certifications WHERE personnel_id = ANY($1) ORDER BY id ASC`,
             [foundIds]
           ),
         ])
-      : [[], [], []]
+      : [[], [], [], []]
 
     function groupByPersonnelId<T extends { personnel_id: number }>(rows: T[]): Map<number, T[]> {
       const map = new Map<number, T[]>()
@@ -350,6 +365,7 @@ export async function buildCareerZip(
     }
     const historyByPid = groupByPersonnelId(allHistory)
     const itCareerByPid = groupByPersonnelId(allItCareer)
+    const projectCareerByPid = groupByPersonnelId(allProjectCareer)
     const certsByPid = groupByPersonnelId(allCerts)
 
     const chunks: PersonChunk[] = []
@@ -363,6 +379,7 @@ export async function buildCareerZip(
       }
       const rawHistory = historyByPid.get(pid) ?? []
       const itCareer = itCareerByPid.get(pid) ?? []
+      const projectCareer = projectCareerByPid.get(pid) ?? []
       const certs = certsByPid.get(pid) ?? []
 
       const seen = new Set<string>()
@@ -433,6 +450,28 @@ export async function buildCareerZip(
         lastRow = findOldestBeyondCap(HISTORY_VISIBLE_CAP)
       }
 
+      // "감리 이외의 IT 경력"이 없는 사람은 "프로젝트 및 기타 경력"으로 대신 채운다
+      // (2026-09-09 사용자 확인). 이쪽은 기간 데이터가 없어(연도는 제외하고 프로젝트명/
+      // 담당분야/역할만 씀) 기간(년) 열은 비워두고, 총 기간 요약도 계산하지 않는다.
+      const itCareerRows =
+        itCareer.length > 0
+          ? itCareer.map(r => ({
+              period: `${r.period_start ?? ''} ~ ${r.period_end ?? ''}`,
+              career: r.career,
+              duty: r.duty ?? '',
+              basis: r.basis ?? '',
+            }))
+          : projectCareer.map(r => ({
+              period: '',
+              career: r.project_name,
+              duty: r.domain ?? '',
+              basis: r.role ?? '',
+            }))
+      const itCareerDuration =
+        itCareer.length > 0
+          ? fmtYearsMonths(itCareer.reduce((s, r) => s + monthsBetween(r.period_start, r.period_end), 0))
+          : ''
+
       chunks.push({
         name: m.person_name,
         domain: m.domain ?? '',
@@ -442,13 +481,8 @@ export async function buildCareerZip(
         lastRow,
         onePageLastRow,
         onePageClusters,
-        itCareerDuration: fmtYearsMonths(itCareer.reduce((s, r) => s + monthsBetween(r.period_start, r.period_end), 0)),
-        itCareerRows: itCareer.map(r => ({
-          period: `${r.period_start ?? ''} ~ ${r.period_end ?? ''}`,
-          career: r.career,
-          duty: r.duty ?? '',
-          basis: r.basis ?? '',
-        })),
+        itCareerDuration,
+        itCareerRows,
         certTotal: certs.length,
         certRows: certs.map(r => ({
           name: r.cert_name,
