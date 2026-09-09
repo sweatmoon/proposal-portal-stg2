@@ -66,13 +66,52 @@ CREATE TABLE IF NOT EXISTS personnel_audit_history (
 );
 
 -- ──────────────────────────────────────────
--- 4. personnel_it_career (IT경력)
+-- 4. personnel_it_career (감리 이외의 IT 경력)
+--    프로파일 HTML "2. 감리 이외의 IT 경력" 표 그대로 — 기간(년)|경력|담당 업무|
+--    유사 경력의 근거 4열뿐이라, 안 쓰는 컬럼(예전 client_org/role/company)은 없앴다
+--    (2026-09-09 — 예전엔 이 표 대신 "3. 프로젝트 및 기타 경력"이 잘못 적재되고
+--    있었는데, 그 표에서만 쓰이던 컬럼이 여기 찌꺼기로 남아있었음).
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS personnel_it_career (
   id              SERIAL PRIMARY KEY,
   personnel_id    INTEGER NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
   period_start    TEXT,
   period_end      TEXT,
+  career          TEXT    NOT NULL,
+  duty            TEXT,
+  basis           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 기존 라이브 DB에 이미 있던 테이블은 CREATE TABLE IF NOT EXISTS로 안 바뀌므로,
+-- 컬럼 이름 변경/삭제를 직접 적용한다. 한 번 적용되면 이후 재실행 시 대상 컬럼이
+-- 이미 없어서 조용히 건너뛴다(멱등).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'personnel_it_career' AND column_name = 'project_name') THEN
+    ALTER TABLE personnel_it_career RENAME COLUMN project_name TO career;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'personnel_it_career' AND column_name = 'domain') THEN
+    ALTER TABLE personnel_it_career RENAME COLUMN domain TO duty;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'personnel_it_career' AND column_name = 'remarks') THEN
+    ALTER TABLE personnel_it_career RENAME COLUMN remarks TO basis;
+  END IF;
+END $$;
+ALTER TABLE personnel_it_career DROP COLUMN IF EXISTS client_org;
+ALTER TABLE personnel_it_career DROP COLUMN IF EXISTS role;
+ALTER TABLE personnel_it_career DROP COLUMN IF EXISTS company;
+
+-- ──────────────────────────────────────────
+-- 4-1. personnel_project_career (프로젝트 및 기타 경력) — 신규
+--    프로파일 HTML "3. 프로젝트 및 기타 경력" 표 그대로 — 연도|프로젝트명|주관 기관|
+--    담당 분야|역할|소속 회사|비고 7열. 아직 파싱/저장 로직은 안 붙였고(2026-09-09),
+--    테이블만 먼저 만들어 둔 상태.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS personnel_project_career (
+  id              SERIAL PRIMARY KEY,
+  personnel_id    INTEGER NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+  year_range      TEXT,
   project_name    TEXT    NOT NULL,
   client_org      TEXT,
   domain          TEXT,
@@ -250,6 +289,7 @@ CREATE INDEX IF NOT EXISTS idx_personnel_auditor_grade    ON personnel(auditor_g
 CREATE INDEX IF NOT EXISTS idx_audit_history_personnel    ON personnel_audit_history(personnel_id);
 CREATE INDEX IF NOT EXISTS idx_audit_history_yearmonth    ON personnel_audit_history(audit_yearmonth);
 CREATE INDEX IF NOT EXISTS idx_it_career_personnel        ON personnel_it_career(personnel_id);
+CREATE INDEX IF NOT EXISTS idx_project_career_personnel   ON personnel_project_career(personnel_id);
 CREATE INDEX IF NOT EXISTS idx_certifications_personnel   ON personnel_certifications(personnel_id);
 CREATE INDEX IF NOT EXISTS idx_audit_projects_name        ON audit_projects(project_name);
 CREATE INDEX IF NOT EXISTS idx_audit_projects_status      ON audit_projects(proposal_status);

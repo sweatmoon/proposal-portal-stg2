@@ -15,7 +15,12 @@
  *     row7: [건국대학교 대학원 박사과정] [] [박사과정]
  *   index 4   : 교육정보
  *   index 8   : 감리실적  (헤더: 연월|사업명|주관기관|공공민간|담당분야|역할|참여단계|참여율)
- *   index 10  : IT 경력   (헤더: 연도|프로젝트명|주관기관|담당분야|역할|소속회사|비고)
+ *   index 10  : (참고용, 더 이상 안 씀) 예전엔 여기를 "IT 경력"으로 취급했으나
+ *               실제로는 "3. 프로젝트 및 기타 경력" 표(헤더: 연도|프로젝트명|주관기관
+ *               |담당분야|역할|소속회사|비고)였다. 진짜 "2. 감리 이외의 IT 경력"은
+ *               앵커 name="it" 섹션에 있고, 160개 프로파일 전수 확인 결과 항상
+ *               기간(년)|경력|담당 업무|유사 경력의 근거 4열 포맷이다(2026-09-09
+ *               발견 및 수정 — 아래 extractAnchorSectionHtml 참고).
  *   index 11  : 자격증    (헤더: 자격증명|발급처|국가공인여부|관련분야)
  */
 
@@ -36,6 +41,20 @@ function findTableByHeaders(
     if (headers.every(h => firstRow.includes(h))) return t
   }
   return null
+}
+
+// 프로파일 HTML의 각 섹션은 "<a name="섹션이름"></a>" 앵커로 시작한다(예:
+// "it" = "2. 감리 이외의 IT 경력", "prjct" = "3. 프로젝트 및 기타 경력"). 헤더
+// 텍스트만으로 표를 추측하면 인접 섹션의 표가 우연히 비슷한 헤더를 가질 때 잘못
+// 고를 수 있어서, 해당 앵커부터 그 다음 앵커 전까지의 HTML만 잘라내 그 안의
+// 표만 보도록 한다. 앵커를 못 찾으면 null(호출 쪽에서 기존 방식으로 fallback).
+function extractAnchorSectionHtml(html: string, anchorName: string): string | null {
+  const anchorRe = new RegExp(`<a\\s+name="${anchorName}"\\s*>`, 'i')
+  const m = anchorRe.exec(html)
+  if (!m) return null
+  const rest = html.slice(m.index + m[0].length)
+  const nextIdx = rest.search(/<a\s+name="[^"]+"\s*>/i)
+  return nextIdx === -1 ? rest : rest.slice(0, nextIdx)
 }
 
 // ─── 반환 타입 ────────────────────────────────────────────────
@@ -84,6 +103,17 @@ export interface PersonnelAuditHistory {
 export interface PersonnelItCareer {
   period_start: string
   period_end: string
+  /** "경력" 열 — HTML 원문 표기 그대로(감사 대상과 무관한 IT 경력을 쌓은 회사/부서명) */
+  career: string
+  /** "담당 업무" 열 */
+  duty: string
+  /** "유사 경력의 근거" 열 */
+  basis: string
+}
+
+export interface PersonnelProjectCareer {
+  /** "연도" 열 — HTML 원문 그대로(예: "2004.01-2004.09"), 시작/끝으로 안 나눔 */
+  year_range: string
   project_name: string
   client_org: string
   domain: string
@@ -97,6 +127,7 @@ export interface ParsedPersonnel {
   certifications: PersonnelCertification[]
   audit_history: PersonnelAuditHistory[]
   it_career: PersonnelItCareer[]
+  project_career: PersonnelProjectCareer[]
 }
 
 // ─── 기간 파싱: "2015년10월～2017년3월" or "2015.10 ~ 2017.03" → { start, end } ──
@@ -306,80 +337,108 @@ export function parsePersonnelHtml(html: string): ParsedPersonnel {
   }
 
   // ── 4. IT 경력 ─────────────────────────────────────────────
-  // 포맷 A (강신배 등): 연도|프로젝트명|주관기관|담당분야|역할|소속회사|비고
-  // 포맷 B (강혁 등):   기간(년)|경력|담당 업무|유사 경력의 근거
+  // "2. 감리 이외의 IT 경력" 섹션(앵커 name="it")의 표를 가져온다. 헤더는 항상
+  // 기간(년)|경력|담당 업무|유사 경력의 근거 4열 포맷(160개 프로파일 전수 확인,
+  // 2026-09-09).
   //
-  // 탐색 우선순위:
-  //   1) 포맷 A 헤더 탐색
-  //   2) 포맷 B 헤더 탐색 ('기간' + '경력' 또는 '담당 업무')
-  //   3) fallback: tables[10]
+  // 예전에는 이 표를 헤더 텍스트("프로젝트명"/"소속 회사" 등)로 추측해서 찾았는데,
+  // 바로 다음 섹션인 "3. 프로젝트 및 기타 경력"(전혀 다른 항목! 7열: 연도|프로젝트명
+  // |주관기관|담당분야|역할|소속회사|비고)이 우연히 비슷한 헤더 키워드를 갖고 있어서
+  // 그 표를 잘못 골라오는 버그가 있었다 — 그동안 DB의 personnel_it_career에는
+  // "감리 이외의 IT 경력"이 아니라 "프로젝트 및 기타 경력"이 저장되고 있었다(실제
+  // 강신배/강춘모 데이터로 확인). 헤더 추측 대신 "it" 앵커와 그 다음 앵커 사이의
+  // HTML만 잘라서 그 안의 표만 보면 확실하게 올바른 섹션을 고를 수 있다.
+  const itSectionHtml = extractAnchorSectionHtml(html, 'it')
+  const itSectionTables = itSectionHtml ? parseHtmlTables(itSectionHtml) : []
   // 데이터 행이 2행 이상인 테이블만 유효로 판단 (헤더만 있는 테이블 제외)
   const hasData = (t: { rows: string[][] } | null | undefined) =>
     t != null && t.rows.length >= 2
-
-  const itTableA =
-    [
-      findTableByHeaders(tables, ['프로젝트명', '소속 회사']),
-      findTableByHeaders(tables, ['프로젝트명', '소속']),
-      findTableByHeaders(tables, ['연도', '프로젝트명', '비고']),
-    ].find(hasData) ?? null
-
-  const itTableB =
-    [
-      findTableByHeaders(tables, ['기간', '경력', '담당']),
-      findTableByHeaders(tables, ['기간(년)', '경력']),
-      findTableByHeaders(tables, ['기간', '담당 업무']),
-    ].find(hasData) ?? null
-
-  // A형 우선, 없으면 B형, 없으면 fallback
-  const itTable = (hasData(itTableA) ? itTableA : null)
-               ?? (hasData(itTableB) ? itTableB : null)
-               ?? (hasData(tables[10]) ? tables[10] : null)
-               ?? itTableA ?? itTableB ?? tables[10]
+  // 앵커를 못 찾은(옛 형식 등) 경우를 대비한 fallback — 헤더 키워드로 4열 표를 직접
+  // 찾는다("3. 프로젝트 및 기타 경력"을 오인식하던 예전 fallback은 제거).
+  const itTable =
+    itSectionTables.find(hasData) ??
+    itSectionTables[0] ??
+    findTableByHeaders(tables, ['기간', '경력', '담당']) ??
+    null
   const t9 = itTable?.rows ?? []
   const it_career: PersonnelItCareer[] = []
 
   if (t9.length > 0) {
-    // 헤더에서 컬럼 인덱스 파악
+    // 헤더에서 컬럼 인덱스 파악 (기간(년)|경력|담당 업무|유사 경력의 근거 4열 고정)
     const hdr = (t9[0] ?? []).map(c => (c ?? '').trim())
-    let cPeriod = 0, cProject = 1, cClient = 2, cDomain = 3, cRole = 4, cCompany = 5, cRemarks = 6
+    let cPeriod = 0, cCareer = 1, cDuty = 2, cBasis = 3
 
     for (let ci = 0; ci < hdr.length; ci++) {
       const h = hdr[ci]
-      if (h.includes('연도') || h.includes('기간'))                                            cPeriod  = ci
-      // '경력'이 포함되더라도 '근거'도 포함이면 remarks로 처리 (예: "유사 경력의 근거")
-      if ((h.includes('프로젝트') || h.includes('사업명') ||
-           (h.includes('경력') && !h.includes('근거') && !h.includes('기간'))))               cProject = ci
-      if (h.includes('주관') || h.includes('발주') ||
-          (h.includes('기관') && !h.includes('교육')))                                         cClient  = ci
-      if (h.includes('담당 업무') || h.includes('담당분야') ||
-          (h.includes('분야') && !h.includes('유사')))                                         cDomain  = ci
-      if (h === '역할' || (h.includes('역할') && !h.includes('분야')))                        cRole    = ci
-      if (h.includes('소속') || h.includes('수행사') ||
-          (h.includes('회사') && !h.includes('기관')))                                         cCompany = ci
-      if (h.includes('비고') || h.includes('근거'))                                            cRemarks = ci
+      if (h.includes('기간') || h.includes('연도'))       cPeriod = ci
+      // '경력'이 포함되더라도 '근거'가 같이 있으면 "유사 경력의 근거" 열이므로 제외
+      if (h.includes('경력') && !h.includes('근거'))       cCareer = ci
+      if (h.includes('담당'))                              cDuty   = ci
+      if (h.includes('근거') || h.includes('비고'))        cBasis  = ci
     }
-
-    // 포맷 B 판별: '기관' 컬럼이 없는 경우 → 클라이언트 없는 포맷
-    const isFmtB = hdr.some(h => h.includes('기간') && (h.includes('년') || h === '기간'))
-                   && !hdr.some(h => h.includes('주관') || h.includes('기관'))
 
     for (let i = 1; i < t9.length; i++) {
       const r = (t9[i] ?? []).map(c => (c ?? '').trim())
-      const periodRaw  = r[cPeriod]  ?? ''
-      const projectRaw = r[cProject] ?? ''
-      if (!periodRaw || !projectRaw) continue
+      const periodRaw = r[cPeriod] ?? ''
+      const careerRaw = r[cCareer] ?? ''
+      if (!periodRaw || !careerRaw) continue
       if (!/\d{4}/.test(periodRaw)) continue
 
       const period = parsePeriod(periodRaw)
       it_career.push({
         period_start: period.start,
         period_end:   period.end,
+        career:       careerRaw,
+        duty:         r[cDuty]  ?? '',
+        basis:        r[cBasis] ?? '',
+      })
+    }
+  }
+
+  // ── 4-1. 프로젝트 및 기타 경력 ("3. 프로젝트 및 기타 경력" 섹션, 앵커 name="prjct") ──
+  // 헤더는 항상 연도|프로젝트명|주관 기관|담당 분야|역할|소속 회사|비고 7열 고정(160개
+  // 프로파일 전수 확인, 2026-09-09). "2. 감리 이외의 IT 경력"과 마찬가지로 헤더 텍스트
+  // 추측 대신 앵커로 정확한 섹션만 잘라서 본다.
+  const projectSectionHtml = extractAnchorSectionHtml(html, 'prjct')
+  const projectSectionTables = projectSectionHtml ? parseHtmlTables(projectSectionHtml) : []
+  const projectTable =
+    projectSectionTables.find(hasData) ??
+    projectSectionTables[0] ??
+    findTableByHeaders(tables, ['프로젝트명', '소속 회사']) ??
+    null
+  const t9b = projectTable?.rows ?? []
+  const project_career: PersonnelProjectCareer[] = []
+
+  if (t9b.length > 0) {
+    // 헤더에서 컬럼 인덱스 파악 (연도|프로젝트명|주관 기관|담당 분야|역할|소속 회사|비고 7열 고정)
+    const hdr = (t9b[0] ?? []).map(c => (c ?? '').trim())
+    let cYear = 0, cProject = 1, cClient = 2, cDomain = 3, cRole = 4, cCompany = 5, cRemarks = 6
+
+    for (let ci = 0; ci < hdr.length; ci++) {
+      const h = hdr[ci]
+      if (h.includes('연도') || h.includes('기간'))                        cYear    = ci
+      if (h.includes('프로젝트') || h.includes('사업명'))                  cProject = ci
+      if (h.includes('주관') || h.includes('발주') || h.includes('기관'))  cClient  = ci
+      if (h.includes('분야'))                                              cDomain  = ci
+      if (h.includes('역할'))                                              cRole    = ci
+      if (h.includes('소속') || h.includes('회사'))                        cCompany = ci
+      if (h.includes('비고'))                                              cRemarks = ci
+    }
+
+    for (let i = 1; i < t9b.length; i++) {
+      const r = (t9b[i] ?? []).map(c => (c ?? '').trim())
+      const yearRaw    = r[cYear]    ?? ''
+      const projectRaw = r[cProject] ?? ''
+      if (!yearRaw || !projectRaw) continue
+      if (!/\d{4}/.test(yearRaw)) continue
+
+      project_career.push({
+        year_range:   yearRaw,
         project_name: projectRaw,
-        client_org:   isFmtB ? '' : (r[cClient]  ?? ''),
+        client_org:   r[cClient]  ?? '',
         domain:       r[cDomain]  ?? '',
-        role:         isFmtB ? '' : (r[cRole]    ?? ''),
-        company:      isFmtB ? '' : (r[cCompany] ?? ''),
+        role:         r[cRole]    ?? '',
+        company:      r[cCompany] ?? '',
         remarks:      r[cRemarks] ?? '',
       })
     }
@@ -408,5 +467,5 @@ export function parsePersonnelHtml(html: string): ParsedPersonnel {
     })
   }
 
-  return { personnel, certifications, audit_history, it_career }
+  return { personnel, certifications, audit_history, it_career, project_career }
 }

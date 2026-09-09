@@ -37,8 +37,11 @@
  *       "총 개수" 행 — 번호=전체 개수, 내용=가장 오래된(최초) 이력.
  *     - 총 건수는 "중복 제거된 전체" personnel_audit_history 행 수 (매칭 여부 무관).
  *
- *   ● 대상사업과 관련된 감리 이외의 경력 (고정 3행): personnel_it_career, id 저장순 앞 3개.
- *     경력=client_org, 담당업무=project_name, 유사 경력의 근거=domain (2026-09-01 사용자 확인).
+ *   ● 대상사업과 관련된 감리 이외의 경력: personnel_it_career, id 저장순.
+ *     컬럼이 프로파일 HTML "2. 감리 이외의 IT 경력" 표(기간(년)|경력|담당 업무|유사
+ *     경력의 근거)와 1:1로 이름을 맞춰뒀다(2026-09-09 — career/duty/basis). 예전엔
+ *     이 표 대신 완전히 다른 섹션인 "3. 프로젝트 및 기타 경력"이 잘못 저장되고
+ *     있었다 — src/parsers/personnel-parser.ts 참고.
  *   ● 보유 자격 현황 (고정 4행): personnel_certifications, id 저장순 앞 4개.
  *     구분은 is_national 1→"국가공인" / 0→"민간".
  *
@@ -87,9 +90,9 @@ interface HistoryRow {
 interface ItCareerRow {
   period_start: string | null
   period_end: string | null
-  project_name: string
-  client_org: string | null
-  domain: string | null
+  career: string
+  duty: string | null
+  basis: string | null
 }
 interface CertRow {
   cert_name: string
@@ -325,7 +328,7 @@ export async function buildCareerZip(
             [foundIds]
           ),
           query<ItCareerRow & { personnel_id: number }>(
-            `SELECT personnel_id, period_start, period_end, project_name, client_org, domain
+            `SELECT personnel_id, period_start, period_end, career, duty, basis
              FROM personnel_it_career WHERE personnel_id = ANY($1) ORDER BY id ASC`,
             [foundIds]
           ),
@@ -442,9 +445,9 @@ export async function buildCareerZip(
         itCareerDuration: fmtYearsMonths(itCareer.reduce((s, r) => s + monthsBetween(r.period_start, r.period_end), 0)),
         itCareerRows: itCareer.map(r => ({
           period: `${r.period_start ?? ''} ~ ${r.period_end ?? ''}`,
-          career: r.client_org ?? '',
-          duty: r.project_name,
-          basis: r.domain ?? '',
+          career: r.career,
+          duty: r.duty ?? '',
+          basis: r.basis ?? '',
         })),
         certTotal: certs.length,
         certRows: certs.map(r => ({

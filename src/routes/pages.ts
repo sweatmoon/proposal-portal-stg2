@@ -1207,18 +1207,15 @@ app.get('/personnel/:id', async (c) => {
       <td class="px-4 py-2.5 text-sm text-slate-500 text-center">${h.participation_rate != null ? h.participation_rate + '%' : '-'}</td>
     </tr>`).join('')
 
-  // IT 경력 목록
+  // IT 경력 목록 (감리 이외의 IT 경력: 기간(년)|경력|담당 업무|유사 경력의 근거)
   const careerRows = itCareer.map(c2 => `
     <tr class="border-t border-slate-100 hover:bg-slate-50">
       <td class="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">${c2.period_start ?? ''} ~ ${c2.period_end ?? ''}</td>
       <td class="px-4 py-2.5 text-sm font-medium text-slate-800 max-w-xs">
-        <div class="line-clamp-2">${c2.project_name}</div>
+        <div class="line-clamp-2">${c2.career}</div>
       </td>
-      <td class="px-4 py-2.5 text-sm text-slate-600">${c2.client_org ?? '-'}</td>
-      <td class="px-4 py-2.5 text-sm text-slate-500 text-center">${c2.domain ?? '-'}</td>
-      <td class="px-4 py-2.5 text-sm text-slate-500 text-center">${c2.role ?? '-'}</td>
-      <td class="px-4 py-2.5 text-sm text-slate-500">${c2.company ?? '-'}</td>
-      <td class="px-4 py-2.5 text-xs text-slate-400">${c2.remarks ?? '-'}</td>
+      <td class="px-4 py-2.5 text-sm text-slate-600 whitespace-pre-line">${c2.duty ?? '-'}</td>
+      <td class="px-4 py-2.5 text-xs text-slate-400 whitespace-pre-line">${c2.basis ?? '-'}</td>
     </tr>`).join('')
 
   // 기본 정보 항목 헬퍼
@@ -1299,13 +1296,10 @@ app.get('/personnel/:id', async (c) => {
             <table class="w-full text-sm">
               <thead>
                 <tr class="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                  <th class="px-4 py-2.5 text-center">기간</th>
-                  <th class="px-4 py-2.5 text-left">사업명</th>
-                  <th class="px-4 py-2.5 text-left">발주기관</th>
-                  <th class="px-4 py-2.5 text-center">분야</th>
-                  <th class="px-4 py-2.5 text-center">역할</th>
-                  <th class="px-4 py-2.5 text-left">수행사</th>
-                  <th class="px-4 py-2.5 text-left">비고</th>
+                  <th class="px-4 py-2.5 text-center">기간(년)</th>
+                  <th class="px-4 py-2.5 text-left">경력</th>
+                  <th class="px-4 py-2.5 text-left">담당 업무</th>
+                  <th class="px-4 py-2.5 text-left">유사 경력의 근거</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">${careerRows}</tbody>
