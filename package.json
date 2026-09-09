@@ -3,15 +3,18 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.tsx",
+    "dev": "tsx watch --env-file=.env src/index.tsx",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.build.json && cp -r public/static dist/",
     "db:migrate": "node dist/db/migrate.js"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@napi-rs/canvas": "^1.0.8",
     "hono": "^4.12.30",
+    "jszip": "^3.10.1",
     "node-html-parser": "^9.0.1",
+    "pdfjs-dist": "^6.3.289",
     "pg": "^8.13.3"
   },
   "devDependencies": {

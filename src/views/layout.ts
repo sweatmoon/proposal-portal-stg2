@@ -7,6 +7,7 @@ export function layout(title: string, body: string, activePage: string = '') {
     { href: '/proposals', icon: 'fa-clipboard-list',label: '제안작업표', key: 'proposals' },
     { href: '/personnel', icon: 'fa-users',          label: '인력정보',  key: 'personnel' },
     { href: '/upload',    icon: 'fa-upload',         label: 'HTML 업로드', key: 'upload' },
+    { href: '/ppt-generate', icon: 'fa-file-powerpoint', label: 'PPT 생성', key: 'ppt-generate' },
     { href: '/ppt-templates', icon: 'fa-layer-group', label: 'PPT 관리',  key: 'ppt-templates' },
   ]
   const navHtml = nav.map(n => `

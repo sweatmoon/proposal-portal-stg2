@@ -13,6 +13,30 @@ import pagesRoute from './routes/pages.js'
 import projectsApiRoute from './routes/projects.js'
 import personnelApiRoute from './routes/personnel-list.js'
 import pptMenuApiRoute from './routes/ppt-menu.js'
+import auditProjectsApiRoute from './routes/audit-projects.js'
+import pptGenerateApiRoute from './routes/ppt-generate.js'
+
+// ── [ppt-portal 추가 기능] "첨부PPT 생성" 라우트 세트 ────────────────────────
+// 사업별로 "0. 정성제안서 첨부 표지" + "1. 감리원 일정 현황표" + "2. 투입 감리원별
+// 실적 및 경력" + "3. 비상근 감리원 참여 동의서" + "4. 표준재무제표" + "5. 사업자등록증"을,
+// 웹 화면에서 체크·드래그로 고른 항목/순서대로 pptx 한 파일로 합쳐서 생성하는 기능
+// 전체입니다. 아래 7개 파일 + src/lib/pptx-*.ts(OOXML 조립 유틸) + src/lib/nas-client.ts
+// (NAS 조회) + src/views/attachment-bundle-widget.ts(UI)가 이 기능의 전부이고,
+// ppt-portal(stg) 스테이징 사이트에서 검증 후 그대로 이식한 것입니다.
+import pptConsentApiRoute from './routes/ppt-consent.js'
+import pptScheduleApiRoute from './routes/ppt-schedule.js'
+import pptCareerApiRoute from './routes/ppt-career.js'
+import pptFinancialStatementApiRoute from './routes/ppt-financial-statement.js'
+import pptBusinessRegistrationApiRoute from './routes/ppt-business-registration.js'
+import pptTaxCertificateApiRoute from './routes/ppt-tax-certificate.js'
+import pptLocalTaxCertificateApiRoute from './routes/ppt-local-tax-certificate.js'
+import pptCorporateRegistryApiRoute from './routes/ppt-corporate-registry.js'
+import pptInsuranceEnrollmentApiRoute from './routes/ppt-insurance-enrollment.js'
+import pptEmploymentCertificateApiRoute from './routes/ppt-employment-certificate.js'
+import pptCareerCertificateApiRoute from './routes/ppt-career-certificate.js'
+import pptStaffingStatusApiRoute from './routes/ppt-staffing-status.js'
+import pptCoverApiRoute from './routes/ppt-cover.js'
+import pptAttachmentBundleApiRoute from './routes/ppt-attachment-bundle.js'
 
 const app = new Hono()
 
@@ -33,6 +57,24 @@ app.route('/api/projects',         projectsApiRoute)
 app.route('/api/personnel',        personnelApiRoute)
 app.route('/api/ppt-menus',        pptMenuApiRoute)
 app.route('/api/ppt-compositions', pptMenuApiRoute)   // compositions 서브라우트 별칭
+app.route('/api/audit-projects',   auditProjectsApiRoute)
+app.route('/api/ppt-generate',     pptGenerateApiRoute)
+
+// [ppt-portal 추가 기능] 첨부PPT 생성 세트 — 위 import 블록의 배너 주석 참고.
+app.route('/api/ppt-consent',              pptConsentApiRoute)
+app.route('/api/ppt-schedule',             pptScheduleApiRoute)
+app.route('/api/ppt-career',               pptCareerApiRoute)
+app.route('/api/ppt-financial-statement',  pptFinancialStatementApiRoute)
+app.route('/api/ppt-business-registration',pptBusinessRegistrationApiRoute)
+app.route('/api/ppt-tax-certificate',      pptTaxCertificateApiRoute)
+app.route('/api/ppt-local-tax-certificate',pptLocalTaxCertificateApiRoute)
+app.route('/api/ppt-corporate-registry',   pptCorporateRegistryApiRoute)
+app.route('/api/ppt-insurance-enrollment', pptInsuranceEnrollmentApiRoute)
+app.route('/api/ppt-employment-certificate',pptEmploymentCertificateApiRoute)
+app.route('/api/ppt-career-certificate',   pptCareerCertificateApiRoute)
+app.route('/api/ppt-staffing-status',      pptStaffingStatusApiRoute)
+app.route('/api/ppt-cover',                pptCoverApiRoute)
+app.route('/api/ppt-attachment-bundle',    pptAttachmentBundleApiRoute)
 
 // ── 페이지 라우트 (홈, /proposals, /personnel, /upload) ───────
 app.route('/', pagesRoute)
