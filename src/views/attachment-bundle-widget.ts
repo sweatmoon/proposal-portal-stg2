@@ -418,6 +418,17 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
 
   function toggleBundleItem(id, checked) {
     bundleItemChecked[id] = checked
+    // 추가서류(카테고리가 있는 항목)는 체크를 풀면 목록에서 아예 빠지고 원래 있던
+    // "01.회사"/"02.제안" 패널로 돌아간다 — 기본 3종(CORE_IDS)은 돌아갈 패널이 없으니
+    // 그대로 목록에 남는다(2026-09-09 사용자 확인 — "체크 풀면 다시 돌아와야하고").
+    if (!checked) {
+      const def = BUNDLE_ITEM_DEFS.find(d => d.id === id)
+      if (def && def.category) {
+        const idx = bundleItemOrder.indexOf(id)
+        if (idx !== -1) bundleItemOrder.splice(idx, 1)
+        renderExtraPanel()
+      }
+    }
     renderBundleList()
     if (id === 'schedule') {
       if (checked) loadBundleSchedulePhases()
@@ -522,10 +533,10 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
       wrap.innerHTML = extras.map(d => \`
         <div class="border border-dashed border-indigo-300 rounded-lg px-3 py-2.5 flex items-center gap-2 bg-indigo-50/30 cursor-grab select-none"
              draggable="true"
+             onclick="bundleExtraCardClick(event,'\${d.id}')"
              ondragstart="bundleExtraDragStart(event,'\${d.id}')"
              ondragend="bundleExtraDragEnd(event)">
-          <input type="checkbox" class="w-4 h-4 accent-indigo-600 cursor-pointer"
-                 onclick="event.stopPropagation()" onchange="addExtraItemToBundle('\${d.id}')">
+          <input type="checkbox" class="w-4 h-4 accent-indigo-600 cursor-pointer" onchange="addExtraItemToBundle('\${d.id}')">
           <i class="fas \${d.icon} text-indigo-400 text-sm"></i>
           <span class="text-sm text-slate-700 flex-1">\${d.label}</span>
           <i class="fas fa-grip-vertical text-slate-300 text-xs"></i>
@@ -533,6 +544,15 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     }
     renderInto('bundleExtraListCompany', 'company')
     renderInto('bundleExtraListProposal', 'proposal')
+  }
+
+  /** 추가서류 카드는 체크박스를 정확히 클릭하지 않고 카드 몸통 아무데나 눌러도 체크되게
+   *  한다(2026-09-09 사용자 확인 — "박스 정확히 클릭 안 하고 몸통 눌러도 체크되게") —
+   *  왼쪽 목록의 bundleRowClick과 같은 패턴. 체크박스 자체를 클릭한 경우는 그 change
+   *  이벤트가 addExtraItemToBundle을 이미 호출하므로 여기서는 건너뛴다(중복 방지). */
+  function bundleExtraCardClick(ev, id) {
+    if (ev.target.closest('input[type=checkbox]')) return
+    addExtraItemToBundle(id)
   }
 
   /** 추가서류 항목을 왼쪽 목록에 넣고 자동 체크한다 — 드래그(bundleListDrop)와 체크박스
@@ -579,11 +599,10 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     const id = bundleDragId
     bundleDragId = null
     if (CORE_IDS.includes(id)) return
-    const idx = bundleItemOrder.indexOf(id)
-    if (idx === -1) return
-    bundleItemOrder.splice(idx, 1)
+    if (!bundleItemOrder.includes(id)) return
+    // 목록에서 빼고 패널로 되돌리는 것 자체는 toggleBundleItem(id, false)가 처리한다
+    // (체크 해제 시 카테고리 항목을 자동으로 되돌리는 로직과 동일 — 2026-09-09).
     toggleBundleItem(id, false)
-    renderExtraPanel()
   }
 
   async function loadBundleSchedulePhases() {
