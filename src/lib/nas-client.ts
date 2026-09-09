@@ -340,3 +340,69 @@ export async function fetchPersonalStampPngs(personNames: string[]): Promise<Map
 
   return result
 }
+
+// 감리원 경력 확인서 발급요청 엑셀 템플릿 — 재직증명서 발행파일처럼 폴더가 아니라 파일
+// 경로 자체가 고정돼있다(2026-09-08 사용자 확인 — "양식_변경X"라는 파일명 그대로 항상 이
+// 파일 하나만 씀).
+const AUDITOR_CAREER_REQUEST_TEMPLATE_FILE =
+  '/activo/04.제안팀/99.악티보포털참조용/감리원 경력 확인서 발급요청(악티보)_yymmdd_n명(양식_변경X).xlsx'
+
+/** NAS에서 감리원 경력 확인서 발급요청 엑셀 템플릿 원본을 통째로 받아옵니다. 못 찾으면 null. */
+export async function fetchAuditorCareerRequestTemplateXlsx(): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 감리원 경력 확인서 템플릿 조회를 건너뜁니다.')
+    return null
+  }
+  return withNasRetry('감리원 경력 확인서 템플릿 조회', async sid => {
+    const buf = await downloadFile(sid, AUDITOR_CAREER_REQUEST_TEMPLATE_FILE)
+    if (!buf) throw new Error('다운로드 실패: ' + AUDITOR_CAREER_REQUEST_TEMPLATE_FILE)
+    return buf
+  })
+}
+
+// 인력별 자격증 스캔본이 모여있는 폴더 — 도장과 마찬가지로 "상근"/"비상근"으로 나뉘어
+// 저장돼있다. 이 기능(감리원 경력 확인서)은 상근 감리원을 우선 대상으로 하므로 "상근"을
+// 먼저 찾고 없으면 "비상근"으로 넘어간다(2026-09-08 사용자 확인 — 도장 조회와 반대 순서:
+// 여기서는 상근 인력이 압도적으로 많음).
+const AUDITOR_CERTIFICATE_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/02.제안/03.자격증사본'
+const AUDITOR_CERTIFICATE_SUBFOLDERS = ['자격증(상근)', '자격증(비상근)'] as const
+
+/**
+ * 인력 이름 목록으로 "자격증(이름).pptx"를 NAS에서 한 번에 찾아 반환합니다 (이름 → 파일
+ * 바이트, 못 찾은 사람은 null). fetchPersonalStampPngs와 동일한 패턴 — 로그인/로그아웃은
+ * 전체 목록에 대해 한 번만 하고, 사람별 다운로드는 같은 세션(sid)으로 동시에 처리합니다.
+ */
+export async function fetchAuditorCertificatePptxs(personNames: string[]): Promise<Map<string, Buffer | null>> {
+  const result = new Map<string, Buffer | null>(personNames.map(name => [name, null]))
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn('[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 자격증 스캔본 조회를 건너뜁니다.')
+    return result
+  }
+
+  let sid: string
+  try {
+    sid = await login()
+  } catch (e) {
+    console.warn('[nas-client] NAS 로그인 실패:', (e as Error).message)
+    return result
+  }
+
+  try {
+    await Promise.all(
+      personNames.map(async name => {
+        for (const sub of AUDITOR_CERTIFICATE_SUBFOLDERS) {
+          const path = `${AUDITOR_CERTIFICATE_FOLDER}/${sub}/자격증(${name}).pptx`
+          const buf = await downloadFile(sid, path)
+          if (buf) {
+            result.set(name, buf)
+            return
+          }
+        }
+      })
+    )
+  } finally {
+    await logout(sid)
+  }
+
+  return result
+}

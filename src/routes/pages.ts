@@ -1092,6 +1092,19 @@ app.get('/personnel', async (c) => {
       <td class="px-4 py-3 text-sm text-slate-500">${p.phone ?? '-'}</td>
     </tr>`).join('')
 
+  // [ppt-portal 추가 기능 — 감리원 경력 확인서 발급요청] 모달 체크리스트 후보 —
+  // 이 문서 자체가 "감리원"용이라 수석감리원/감리원 등급만 대상으로 한다(2026-09-08).
+  const careerRequestCandidates = list.filter(
+    p => p.auditor_grade === '수석감리원' || p.auditor_grade === '감리원'
+  )
+  const careerRequestRows = careerRequestCandidates.map(p => `
+    <label class="career-request-row flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-indigo-50 cursor-pointer" data-name="${String(p.name).toLowerCase()}">
+      <input type="checkbox" class="career-request-checkbox w-4 h-4 accent-indigo-600" value="${p.id}">
+      <span class="text-sm font-medium text-slate-800 flex-1">${p.name}</span>
+      <span class="text-xs text-slate-400">${p.auditor_grade}</span>
+      <span class="text-xs text-slate-400">${p.company ?? '-'}</span>
+    </label>`).join('')
+
   const body = `
   <div class="p-6 md:p-8">
     <div class="mb-6">
@@ -1099,7 +1112,7 @@ app.get('/personnel', async (c) => {
       <p class="text-slate-500 text-sm mt-1">총 ${list.length}명</p>
     </div>
 
-    <div class="flex flex-wrap gap-2 mb-4 items-center">
+    <div class="flex flex-wrap gap-2 mb-4 items-center justify-between">
       <form method="GET" action="/personnel" class="flex gap-2 flex-wrap">
         <input type="text" name="search" value="${search}"
           placeholder="이름 / 회사 검색..."
@@ -1111,6 +1124,10 @@ app.get('/personnel', async (c) => {
           <i class="fas fa-search mr-1"></i>검색
         </button>
       </form>
+      <button type="button" onclick="openCareerRequestModal()"
+        class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 whitespace-nowrap">
+        <i class="fas fa-file-excel mr-1"></i>경력 확인서 발급요청
+      </button>
     </div>
 
     <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -1137,7 +1154,114 @@ app.get('/personnel', async (c) => {
         </table>
       </div>
     </div>
-  </div>`
+  </div>
+
+  <!-- [ppt-portal 추가 기능] 감리원 경력 확인서 발급요청 모달 -->
+  <div id="careerRequestModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+      <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+        <h2 class="font-bold text-slate-800">감리원 경력 확인서 발급요청</h2>
+        <button type="button" onclick="closeCareerRequestModal()" class="text-slate-400 hover:text-slate-600">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="px-5 py-3 border-b border-slate-100 flex gap-2 items-center">
+        <input type="text" id="careerRequestFilter" placeholder="이름으로 필터..." oninput="filterCareerRequestRows(this.value)"
+          class="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+        <button type="button" onclick="toggleAllCareerRequestRows(true)" class="text-xs text-indigo-600 hover:underline whitespace-nowrap">전체선택</button>
+        <button type="button" onclick="toggleAllCareerRequestRows(false)" class="text-xs text-slate-400 hover:underline whitespace-nowrap">전체해제</button>
+      </div>
+      <div class="px-2 py-2 overflow-y-auto flex-1">
+        ${careerRequestRows || '<p class="text-center text-slate-400 text-sm py-8">수석감리원/감리원 등급의 인력이 없습니다.</p>'}
+      </div>
+      <div class="px-5 py-4 border-t border-slate-200 flex items-center justify-between">
+        <span id="careerRequestCount" class="text-xs text-slate-400">0명 선택</span>
+        <button type="button" id="careerRequestSubmitBtn" onclick="submitCareerRequest()"
+          class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
+          요청서 생성
+        </button>
+      </div>
+    </div>
+  </div>
+  <script>
+    function openCareerRequestModal() {
+      document.getElementById('careerRequestModal').classList.remove('hidden')
+      updateCareerRequestCount()
+    }
+    function closeCareerRequestModal() {
+      document.getElementById('careerRequestModal').classList.add('hidden')
+    }
+    function filterCareerRequestRows(text) {
+      const needle = text.trim().toLowerCase()
+      document.querySelectorAll('.career-request-row').forEach(row => {
+        row.style.display = !needle || row.dataset.name.includes(needle) ? '' : 'none'
+      })
+    }
+    function toggleAllCareerRequestRows(checked) {
+      document.querySelectorAll('.career-request-row').forEach(row => {
+        if (row.style.display === 'none') return
+        row.querySelector('.career-request-checkbox').checked = checked
+      })
+      updateCareerRequestCount()
+    }
+    function updateCareerRequestCount() {
+      const n = document.querySelectorAll('.career-request-checkbox:checked').length
+      document.getElementById('careerRequestCount').textContent = n + '명 선택'
+    }
+    document.addEventListener('change', (ev) => {
+      if (ev.target.classList && ev.target.classList.contains('career-request-checkbox')) updateCareerRequestCount()
+    })
+    async function submitCareerRequest() {
+      const ids = [...document.querySelectorAll('.career-request-checkbox:checked')].map(el => Number(el.value))
+      if (!ids.length) { alert('한 명 이상 선택해주세요.'); return }
+
+      const btn = document.getElementById('careerRequestSubmitBtn')
+      btn.disabled = true
+      btn.textContent = '생성 중...'
+      try {
+        const res = await fetch('/api/personnel-career-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personnelIds: ids }),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || ('요청 실패 (' + res.status + ')'))
+        }
+        const blob = await res.blob()
+        const disposition = res.headers.get('Content-Disposition') || ''
+        const m = disposition.match(/filename="([^"]+)"/)
+        const filename = m ? decodeURIComponent(m[1]) : '감리원_경력_확인서_발급요청.xlsx'
+
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = filename
+        document.body.appendChild(a); a.click(); a.remove()
+        URL.revokeObjectURL(url)
+
+        const decodeList = (h) => { const v = res.headers.get(h); return v ? decodeURIComponent(v).split(',').filter(Boolean) : [] }
+        const notFound = decodeList('X-Skipped-Not-Found')
+        const noPptx = decodeList('X-Skipped-No-Cert-Pptx')
+        const noGradeImg = decodeList('X-Skipped-No-Grade-Image')
+        const noCertImg = decodeList('X-Skipped-No-Cert-Image')
+        const noHireDate = decodeList('X-Skipped-No-Hire-Date')
+        const notices = []
+        if (noPptx.length) notices.push('자격증 스캔본을 못 찾음(그림 미삽입): ' + noPptx.join(', '))
+        if (noGradeImg.length) notices.push('등급 이미지를 못 찾음: ' + noGradeImg.join(', '))
+        if (noCertImg.length) notices.push('자격명 이미지를 못 찾음: ' + noCertImg.join(', '))
+        if (noHireDate.length) notices.push('입사일을 못 찾음(재직증명서발행파일에 없거나 퇴직 처리됨): ' + noHireDate.join(', '))
+        if (notFound.length) notices.push('인력 정보를 못 찾음(제외됨): ' + notFound.join(', '))
+        if (notices.length) alert('일부 항목을 확인해주세요:\\n\\n' + notices.join('\\n'))
+
+        closeCareerRequestModal()
+      } catch (e) {
+        alert('요청서 생성 중 오류가 발생했습니다: ' + e.message)
+      } finally {
+        btn.disabled = false
+        btn.textContent = '요청서 생성'
+      }
+    }
+  </script>`
 
   return c.html(layout('인력정보', body, 'personnel'))
 })

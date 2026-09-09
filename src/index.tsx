@@ -38,6 +38,13 @@ import pptStaffingStatusApiRoute from './routes/ppt-staffing-status.js'
 import pptCoverApiRoute from './routes/ppt-cover.js'
 import pptAttachmentBundleApiRoute from './routes/ppt-attachment-bundle.js'
 
+// [ppt-portal 추가 기능 — 인력정보 탭] 감리원 경력 확인서 발급요청 엑셀 생성.
+// src/lib/auditor-career-request-doc.ts + xlsx-runtext.ts/xlsx-sheet-clone.ts/
+// xlsx-cert-image-swap.ts/pptx-cert-lookup.ts(조립 유틸) + nas-client.ts(템플릿/자격증
+// 스캔본 조회)가 이 기능의 전부입니다. 위 첨부PPT 세트와 달리 특정 사업(project)이 아니라
+// 인력정보 탭 전체에서 체크한 인원을 대상으로 합니다.
+import personnelCareerRequestApiRoute from './routes/personnel-career-request.js'
+
 const app = new Hono()
 
 // ── 미들웨어 ──────────────────────────────────────────────────
@@ -75,6 +82,7 @@ app.route('/api/ppt-career-certificate',   pptCareerCertificateApiRoute)
 app.route('/api/ppt-staffing-status',      pptStaffingStatusApiRoute)
 app.route('/api/ppt-cover',                pptCoverApiRoute)
 app.route('/api/ppt-attachment-bundle',    pptAttachmentBundleApiRoute)
+app.route('/api/personnel-career-request', personnelCareerRequestApiRoute)
 
 // ── 페이지 라우트 (홈, /proposals, /personnel, /upload) ───────
 app.route('/', pagesRoute)
