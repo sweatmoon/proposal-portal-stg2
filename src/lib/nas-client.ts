@@ -156,6 +156,31 @@ async function fetchLatestPdfFromFolder(
   })
 }
 
+/** 폴더 안에서 .pptx 또는 .pdf 확장자 파일 중, 파일이름 기준으로 가장 최신(문자열
+ *  오름차순 정렬했을 때 마지막) 것 하나를 찾아 통째로 받아온다. 확장자가 섞여있어도
+ *  날짜가 파일명에 고정폭으로 박혀있는 한 문자열 정렬로 최신 판단이 가능하다(2026-09-09
+ *  — 국세 납세증명서: pptx/pdf 섞여있는 폴더에서 최신 파일 고르기용으로 추가). */
+async function fetchLatestPptxOrPdfFromFolder(
+  folder: string,
+  label: string
+): Promise<{ buf: Buffer; isPdf: boolean } | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn(`[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 ${label} 조회를 건너뜁니다.`)
+    return null
+  }
+  return withNasRetry(`${label} 조회`, async sid => {
+    const files = await listFolder(sid, folder)
+    const latest = files
+      .filter(f => !f.isdir && /\.(pptx|pdf)$/i.test(f.name))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
+      .pop()
+    if (!latest) throw new Error('폴더에서 .pptx/.pdf 파일을 찾지 못함: ' + folder)
+    const buf = await downloadFile(sid, `${folder}/${latest.name}`)
+    if (!buf) throw new Error('다운로드 실패: ' + latest.name)
+    return { buf, isPdf: /\.pdf$/i.test(latest.name) }
+  })
+}
+
 // 회사 표준재무제표 pptx가 있는 폴더. 파일명에 갱신 날짜가 박혀 있어("표준재무제표(3년)_
 // 260720.pptx") 계속 바뀌므로 파일명을 하드코딩하지 않고, 이 폴더에서 .pptx 확장자인
 // 파일을 찾아 그때그때 사용한다(2026-09-02 확인 — 폴더 안에 연도별 .pdf도 같이 있지만
@@ -181,13 +206,18 @@ export async function fetchBusinessRegistrationPptx(): Promise<Buffer | null> {
   return fetchPptxFromFolder(BUSINESS_REGISTRATION_FOLDER, '사업자등록증')
 }
 
-// 국세 납세증명서 pptx가 있는 폴더 — 유효기한별 .pdf도 같이 있지만, 이미지가 들어있는
-// pptx 원본은 하나뿐이라 그걸 쓴다(2026-09-03 사용자 확인 — "ppt 파일" 사용).
+// 국세 납세증명서가 있는 폴더 — 이미지가 들어있는 pptx 원본 하나와, 유효기한이 지날
+// 때마다 새로 추가되는 .pdf들이 같이 있다. 처음엔 pptx만 썼는데, pptx는 안 갱신되고
+// 최신 내용은 계속 .pdf로만 올라와서 pptx가 오래돼 못 쓰게 되는 문제가 있었다(2026-09-09
+// 사용자 확인 — "ppt든 pdf든 상관없이 가져올 수 있도록... 가장 최신 파일"). 그래서 확장자
+// 상관없이 파일이름 기준 가장 최신 것 하나를 고른다.
 const TAX_CERTIFICATE_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/01.회사/11.국세 납세증명서'
 
-/** NAS에서 국세 납세증명서 pptx 원본을 통째로 받아옵니다. 못 찾으면 null. */
-export async function fetchTaxCertificatePptx(): Promise<Buffer | null> {
-  return fetchPptxFromFolder(TAX_CERTIFICATE_FOLDER, '국세 납세증명서')
+/** NAS에서 국세 납세증명서 중 파일이름 기준 가장 최신 파일(.pptx 또는 .pdf)을 통째로
+ *  받아옵니다. 확장자에 따라 이미지 추출 방식이 다르므로(pptx=임베드 이미지 추출,
+ *  pdf=페이지 렌더링) isPdf를 같이 반환합니다. 못 찾으면 null. */
+export async function fetchTaxCertificateFile(): Promise<{ buf: Buffer; isPdf: boolean } | null> {
+  return fetchLatestPptxOrPdfFromFolder(TAX_CERTIFICATE_FOLDER, '국세 납세증명서')
 }
 
 // 지방세 납세증명서 .pdf가 있는 폴더 — pptx 없이 유효기한별 .pdf만 계속 추가되므로,

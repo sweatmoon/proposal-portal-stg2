@@ -9,8 +9,10 @@
  * (2026-09-03 사용자 확인 — "전부 범용(도장O) 쓸 거임").
  *
  * 데이터 출처:
- *   - 큰 이미지: NAS "11.국세 납세증명서" 폴더의 pptx 원본에서 이미지를 뽑아 씀
- *     (사업/인력 데이터와 무관 — 회사 서류라 항상 동일).
+ *   - 큰 이미지: NAS "11.국세 납세증명서" 폴더에서 파일이름 기준 가장 최신 파일(.pptx
+ *     또는 .pdf, 확장자 안 가림 — 2026-09-09 사용자 확인) 하나를 받아 이미지로 씀
+ *     (사업/인력 데이터와 무관 — 회사 서류라 항상 동일). pptx면 임베드된 이미지를 그대로
+ *     추출하고, pdf면 페이지를 렌더링해 이미지로 만든다(src/lib/pdf-render.ts).
  *   - 작은 이미지(도장): 사업자등록증과 같은 회사 도장 폴더에서, 사용자가 고른 종류로 받아 씀.
  *
  * POST /api/ppt-tax-certificate/:projectId
@@ -22,8 +24,9 @@ import { Hono } from 'hono'
 import type JSZip from 'jszip'
 import { queryOne } from '../db/client.js'
 import { extractAllImagesFromPptx } from '../lib/pptx-image-swap.js'
+import { pdfAllPagesToPng } from '../lib/pdf-render.js'
 import { buildStampedDeckZip } from '../lib/pptx-stamped-doc.js'
-import { fetchTaxCertificatePptx, fetchCompanyStampPng, type CompanyStampType } from '../lib/nas-client.js'
+import { fetchTaxCertificateFile, fetchCompanyStampPng, type CompanyStampType } from '../lib/nas-client.js'
 
 const app = new Hono()
 
@@ -47,13 +50,15 @@ export async function buildTaxCertificateZip(
   )
   if (!project) throw new Error('사업을 찾을 수 없습니다')
 
-  const [sourcePptx, stampPng] = await Promise.all([
-    fetchTaxCertificatePptx(),
+  const [sourceFile, stampPng] = await Promise.all([
+    fetchTaxCertificateFile(),
     fetchCompanyStampPng(stampType),
   ])
-  if (!sourcePptx) throw new Error('NAS에서 국세 납세증명서 원본 파일을 가져오지 못했습니다')
+  if (!sourceFile) throw new Error('NAS에서 국세 납세증명서 원본 파일을 가져오지 못했습니다')
 
-  const bigImages = await extractAllImagesFromPptx(sourcePptx)
+  const bigImages = sourceFile.isPdf
+    ? await pdfAllPagesToPng(sourceFile.buf)
+    : await extractAllImagesFromPptx(sourceFile.buf)
   if (!bigImages.length) throw new Error('국세 납세증명서 원본 파일에서 이미지를 찾지 못했습니다')
 
   const commonMap: Record<string, string> = {
