@@ -510,10 +510,23 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
            draggable="true"
            ondragstart="bundleExtraDragStart(event,'\${d.id}')"
            ondragend="bundleExtraDragEnd(event)">
+        <input type="checkbox" class="w-4 h-4 accent-indigo-600 cursor-pointer"
+               onclick="event.stopPropagation()" onchange="addExtraItemToBundle('\${d.id}')">
         <i class="fas \${d.icon} text-indigo-400 text-sm"></i>
         <span class="text-sm text-slate-700 flex-1">\${d.label}</span>
         <i class="fas fa-grip-vertical text-slate-300 text-xs"></i>
       </div>\`).join('')
+  }
+
+  /** 추가서류 항목을 왼쪽 목록에 넣고 자동 체크한다 — 드래그(bundleListDrop)와 체크박스
+   *  (2026-09-09 사용자 확인 — "드래그하는거 + 체크박스 도입, 체크하면 알아서 왼쪽에
+   *  추가되는거") 둘 다 여기로 모은다. 목록 안 정확한 위치는 드래그 재정렬로 조정하면
+   *  되므로 여기서는 위치 계산 없이 끝에 붙인다. */
+  function addExtraItemToBundle(id) {
+    if (bundleItemOrder.includes(id)) return
+    bundleItemOrder.push(id)
+    renderExtraPanel()
+    toggleBundleItem(id, true)
   }
 
   function bundleExtraDragStart(ev, id) {
@@ -537,10 +550,7 @@ export function renderAttachmentBundleWidget(): AttachmentBundleWidget {
     const id = bundleDragId
     bundleDragFromExtra = false
     bundleDragId = null
-    if (bundleItemOrder.includes(id)) return
-    bundleItemOrder.push(id)
-    renderExtraPanel()
-    toggleBundleItem(id, true)
+    addExtraItemToBundle(id)
   }
 
   // 반대 방향 — 왼쪽 목록의 항목을 추가서류 패널로 드래그하면 목록에서 빼서 카탈로그로
