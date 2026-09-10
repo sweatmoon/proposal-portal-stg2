@@ -2052,7 +2052,7 @@ app.get('/ppt-generate', (c) => {
           <div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex-shrink-0">
             <div class="text-xs font-bold text-slate-500 uppercase tracking-wide">① 첨부 항목 선택</div>
           </div>
-          <div id="bundleItemList" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
+          <div id="bundleItemList" class="flex-1 overflow-y-auto p-4 flex gap-4"></div>
 
           <!-- 사업자등록증/납세증명서/법인등기부등본/4대보험 중 하나라도 선택 시 나타나는 도장 선택 —
                이 항목들은 전부 "범용 템플릿(도장O)" 슬롯 하나를 공유하므로 도장도 한 번만 고른다. -->
@@ -2443,7 +2443,7 @@ app.get('/ppt-generate', (c) => {
             : '<i class="fas fa-exclamation-circle text-amber-400"></i>')
           + '</label>'
       }).join('')
-      return '<div><div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">' + g.label + '</div>'
+      return '<div class="flex-1 min-w-0"><div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">' + g.label + '</div>'
         + '<div class="space-y-1.5">' + itemsHtml + '</div></div>'
     }).join('')
   }
