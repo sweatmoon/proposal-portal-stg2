@@ -2097,6 +2097,22 @@ app.get('/ppt-generate', (c) => {
         </button>
       </div>
     </div>
+
+    <!-- 모달 옆 — 최종 결과물 정렬 기준(2026-09-10 사용자 확인). 아직 실제 생성 로직에는
+         연결 안 되어 있고 선택 상태만 유지하는 UI만 먼저 추가함. -->
+    <div class="bg-white rounded-2xl shadow-xl w-48 flex-shrink-0 p-4 self-stretch flex flex-col">
+      <div class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">정렬 기준</div>
+      <div class="space-y-2 text-sm text-slate-700">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="bundleSortBasis" value="document" checked class="accent-violet-600" onchange="onSortBasisChange(this.value)">
+          서류별
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="bundleSortBasis" value="personnel" class="accent-violet-600" onchange="onSortBasisChange(this.value)">
+          인력별
+        </label>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -2204,21 +2220,27 @@ app.get('/ppt-generate', (c) => {
   // 사업자등록증/납세증명서/법인등기부등본/4대보험/표준재무제표는 각자 별도 템플릿을
   // 올릴 필요 없이 그 공유 슬롯(templateMenuCode)을 그대로 쓴다(2026-09-03 원래 설계 —
   // "전부 범용 템플릿 쓸 거임"). group으로 "필수 3개/회사/제안" 분류(2026-09-10 사용자 확인).
+  // perPerson: 인력 1명당 1건씩 반복 생성되는 서류 — 이 항목만 "인력만큼/하나만" 드롭박스를
+  // 보여준다(2026-09-10 사용자 확인). 나머지(표 형태로 전원을 한 표에 담거나, 인력과
+  // 무관한 회사 서류)는 반복 개념 자체가 없어서 기존처럼 템플릿 상태 아이콘만 보여준다.
+  // 지금은 드롭박스 선택 상태만 UI에 보관 — 실제 생성 로직에는 아직 연결 안 됨.
   var ITEM_CATALOG = [
     { id: 'schedule',      label: '감리원 일정 현황표',        typeKey: 'schedule',      templateMenuCode: 'ATT_SCHEDULE',    group: 'core' },
-    { id: 'career',        label: '투입 감리원별 실적 및 경력', typeKey: 'career',        templateMenuCode: 'ATT_CAREER',      group: 'core' },
-    { id: 'consent',       label: '비상근 감리원 참여 동의서',  typeKey: 'consent',       templateMenuCode: 'ATT_CONSENT',     group: 'core' },
+    { id: 'career',        label: '투입 감리원별 실적 및 경력', typeKey: 'career',        templateMenuCode: 'ATT_CAREER',      group: 'core', perPerson: true },
+    { id: 'consent',       label: '비상근 감리원 참여 동의서',  typeKey: 'consent',       templateMenuCode: 'ATT_CONSENT',     group: 'core', perPerson: true },
     { id: 'financial',     label: '표준재무제표',              typeKey: 'financial',     templateMenuCode: 'ATT_STAMP_NO',    group: 'company' },
     { id: 'bizreg',        label: '사업자등록증',              typeKey: 'bizreg',        templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
     { id: 'taxcert',       label: '국세 납세증명서',            typeKey: 'taxcert',       templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
     { id: 'localtaxcert',  label: '지방세 납세증명서',          typeKey: 'localtaxcert',  templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
     { id: 'corpregistry',  label: '법인등기부등본',             typeKey: 'corpregistry',  templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true, corpRegistry: true },
     { id: 'insurance',     label: '4대보험 가입확인서',         typeKey: 'insurance',     templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
-    { id: 'employmentCert', label: '재직증명서',                typeKey: 'employmentCert', templateMenuCode: 'ATT_EMPLOYMENT',  group: 'proposal' },
-    { id: 'careerCert',     label: '경력증명서',                 typeKey: 'careerCert',     templateMenuCode: 'ATT_CAREER_CERT', group: 'proposal' },
+    { id: 'employmentCert', label: '재직증명서',                typeKey: 'employmentCert', templateMenuCode: 'ATT_EMPLOYMENT',  group: 'proposal', perPerson: true },
+    { id: 'careerCert',     label: '경력증명서',                 typeKey: 'careerCert',     templateMenuCode: 'ATT_CAREER_CERT', group: 'proposal', perPerson: true },
     { id: 'staffingStatus', label: '상근감리원인력현황',         typeKey: 'staffingStatus', templateMenuCode: 'ATT_STAFFING',    group: 'proposal' },
   ]
   var CORE_IDS = ['schedule', 'career', 'consent']
+  var bundleRepeatMode = {}   // { itemId: 'all' | 'one' } — perPerson 항목 전용, 기본값 'all'
+  var bundleSortBasis = 'document'  // 'document' | 'personnel' — 최종 결과물 정렬 기준(아직 생성 로직 미연결)
 
   function findMenuByCode(code) {
     return bundleMenus.find(function(m) { return m.menu_code === code })
@@ -2382,6 +2404,8 @@ app.get('/ppt-generate', (c) => {
     bundleMenus = []
     bundleStampType = null
     bundleCorpRegistryIncludeCancelled = null
+    bundleRepeatMode = {}
+    bundleSortBasis = 'document'
     personnelChecked = {}
     personnelKwMap = {}
     document.getElementById('bundleModalProjectName').textContent = projectName
@@ -2390,6 +2414,7 @@ app.get('/ppt-generate', (c) => {
     document.querySelectorAll('input[name="bundleStamp"]').forEach(function(el) { el.checked = false })
     document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
     document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
+    document.querySelectorAll('input[name="bundleSortBasis"]').forEach(function(el) { el.checked = (el.value === 'document') })
     // 키워드 행 초기화 — "② 인력 선택/③ 키워드 변환" UI는 아직 이 모달에 마크업이 없고
     // 백엔드도 keywords/personnelKeywords/personnelIds를 안 읽는 미완성 기능이라, 그
     // 요소들이 없어서 여기서 죽지 않게 존재할 때만 건드린다(2026-09-10 — 이 3줄 때문에
@@ -2433,14 +2458,29 @@ app.get('/ppt-generate', (c) => {
         var checked = !!bundleItemChecked[it.id]
         var menu = findMenuByCode(it.templateMenuCode)
         var hasTemplate = menu && menu.templates && menu.templates.length > 0 && !!menu.templates[0].pptx_b64_key
+        var trailing
+        if (it.perPerson) {
+          // 인력만큼 반복(기본값) / 하나만 — 기본값과 다르면 색을 다르게 해서 눈에 띄게 한다
+          // (2026-09-10 사용자 확인). 아직 실제 생성 로직에는 연결 안 된 상태 표시용 UI.
+          var mode = bundleRepeatMode[it.id] || 'all'
+          var isNonDefault = mode !== 'all'
+          trailing = '<select class="text-[10px] font-semibold rounded-md pl-1.5 pr-4 py-1 border cursor-pointer flex-shrink-0 '
+            + (isNonDefault ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-500')
+            + '" onclick="event.stopPropagation()" onchange="onRepeatModeChange(&#39;' + it.id + '&#39;, this.value)">'
+            + '<option value="all"' + (mode === 'all' ? ' selected' : '') + '>인력만큼</option>'
+            + '<option value="one"' + (mode === 'one' ? ' selected' : '') + '>하나만</option>'
+            + '</select>'
+        } else {
+          trailing = hasTemplate
+            ? '<i class="fas fa-check-circle text-emerald-500"></i>'
+            : '<i class="fas fa-exclamation-circle text-amber-400"></i>'
+        }
         return '<label class="flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition text-xs '
           + (checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:bg-slate-50') + '">'
           + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
           + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(&#39;' + it.id + '&#39;, this.checked)">'
           + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(it.label) + '</span>'
-          + (hasTemplate
-            ? '<i class="fas fa-check-circle text-emerald-500"></i>'
-            : '<i class="fas fa-exclamation-circle text-amber-400"></i>')
+          + trailing
           + '</label>'
       }).join('')
       return '<div class="flex-1 min-w-0"><div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">' + g.label + '</div>'
@@ -2473,6 +2513,15 @@ app.get('/ppt-generate', (c) => {
 
   function onCorpRegistryCancelledChange(value) {
     bundleCorpRegistryIncludeCancelled = value
+  }
+
+  function onRepeatModeChange(id, value) {
+    bundleRepeatMode[id] = value
+    renderBundleItemList()
+  }
+
+  function onSortBasisChange(value) {
+    bundleSortBasis = value
   }
 
   // ── 키워드 행 추가/수집 ────────────────────────────────────────
