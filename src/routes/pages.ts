@@ -2041,7 +2041,22 @@ app.get('/ppt-generate', (c) => {
           <h3 class="font-bold text-slate-800 text-lg"><i class="fas fa-paperclip mr-2 text-indigo-500"></i>첨부PPT 생성</h3>
           <p class="text-xs text-slate-400 mt-0.5" id="bundleModalProjectName"></p>
         </div>
-        <button onclick="closeBundleModal()" class="text-slate-400 hover:text-slate-700 text-xl w-8 h-8 flex items-center justify-center"><i class="fas fa-times"></i></button>
+        <div class="flex items-center gap-4">
+          <!-- 정렬 기준 — X 버튼 왼쪽(2026-09-10 사용자 확인). 아직 실제 생성 로직에는
+               연결 안 되어 있고 선택 상태만 유지하는 UI만 먼저 추가함. -->
+          <div class="flex items-center gap-2.5 text-xs text-slate-600">
+            <span class="font-bold text-slate-400 uppercase text-[10px] tracking-wide">정렬 기준</span>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="radio" name="bundleSortBasis" value="document" checked class="accent-violet-600" onchange="onSortBasisChange(this.value)">
+              서류별
+            </label>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="radio" name="bundleSortBasis" value="personnel" class="accent-violet-600" onchange="onSortBasisChange(this.value)">
+              인력별
+            </label>
+          </div>
+          <button onclick="closeBundleModal()" class="text-slate-400 hover:text-slate-700 text-xl w-8 h-8 flex items-center justify-center"><i class="fas fa-times"></i></button>
+        </div>
       </div>
 
       <!-- 2-column body -->
@@ -2095,22 +2110,6 @@ app.get('/ppt-generate', (c) => {
           class="px-5 py-2 text-sm rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold">
           <i class="fas fa-magic mr-1"></i>생성
         </button>
-      </div>
-    </div>
-
-    <!-- 모달 옆 — 최종 결과물 정렬 기준(2026-09-10 사용자 확인). 아직 실제 생성 로직에는
-         연결 안 되어 있고 선택 상태만 유지하는 UI만 먼저 추가함. -->
-    <div class="bg-white rounded-2xl shadow-xl w-48 flex-shrink-0 p-4 self-stretch flex flex-col">
-      <div class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">정렬 기준</div>
-      <div class="space-y-2 text-sm text-slate-700">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="radio" name="bundleSortBasis" value="document" checked class="accent-violet-600" onchange="onSortBasisChange(this.value)">
-          서류별
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="radio" name="bundleSortBasis" value="personnel" class="accent-violet-600" onchange="onSortBasisChange(this.value)">
-          인력별
-        </label>
       </div>
     </div>
   </div>
@@ -2458,29 +2457,30 @@ app.get('/ppt-generate', (c) => {
         var checked = !!bundleItemChecked[it.id]
         var menu = findMenuByCode(it.templateMenuCode)
         var hasTemplate = menu && menu.templates && menu.templates.length > 0 && !!menu.templates[0].pptx_b64_key
-        var trailing
-        if (it.perPerson) {
-          // 인력만큼 반복(기본값) / 하나만 — 기본값과 다르면 색을 다르게 해서 눈에 띄게 한다
-          // (2026-09-10 사용자 확인). 아직 실제 생성 로직에는 연결 안 된 상태 표시용 UI.
-          var mode = bundleRepeatMode[it.id] || 'all'
-          var isNonDefault = mode !== 'all'
-          trailing = '<select class="text-[10px] font-semibold rounded-md pl-1.5 pr-4 py-1 border cursor-pointer flex-shrink-0 '
-            + (isNonDefault ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-500')
-            + '" onclick="event.stopPropagation()" onchange="onRepeatModeChange(&#39;' + it.id + '&#39;, this.value)">'
-            + '<option value="all"' + (mode === 'all' ? ' selected' : '') + '>인력만큼</option>'
-            + '<option value="one"' + (mode === 'one' ? ' selected' : '') + '>하나만</option>'
-            + '</select>'
-        } else {
-          trailing = hasTemplate
-            ? '<i class="fas fa-check-circle text-emerald-500"></i>'
-            : '<i class="fas fa-exclamation-circle text-amber-400"></i>'
-        }
+        // 인력만큼 반복 / 하나만 — 의미가 모호해 보이는 항목(회사서류/표 형태)도 인력별로
+        // 붙여야 하는 사업이 있을 수 있어 전 항목에 다 넣는다(2026-09-10 사용자 확인 —
+        // "의미 없어보여도 전부 다 넣어"). 항목별 원래 성격에 맞는 기본값을 따로 두고
+        // (인력 반복이 자연스러운 4종만 "인력만큼", 나머지는 "하나만"), 기본값과 다르면
+        // 색을 다르게 해서 눈에 띄게 한다. 아직 실제 생성 로직에는 연결 안 된 상태 표시용 UI.
+        var defaultMode = it.perPerson ? 'all' : 'one'
+        var mode = bundleRepeatMode[it.id] || defaultMode
+        var isNonDefault = mode !== defaultMode
+        var templateIcon = hasTemplate
+          ? '<i class="fas fa-check-circle text-emerald-500"></i>'
+          : '<i class="fas fa-exclamation-circle text-amber-400"></i>'
+        var repeatSelect = '<select class="text-[10px] font-semibold rounded-md pl-1.5 pr-4 py-1 border cursor-pointer flex-shrink-0 '
+          + (isNonDefault ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-500')
+          + '" onclick="event.stopPropagation()" onchange="onRepeatModeChange(&#39;' + it.id + '&#39;, this.value)">'
+          + '<option value="all"' + (mode === 'all' ? ' selected' : '') + '>인력만큼</option>'
+          + '<option value="one"' + (mode === 'one' ? ' selected' : '') + '>하나만</option>'
+          + '</select>'
         return '<label class="flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition text-xs '
           + (checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:bg-slate-50') + '">'
           + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
           + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(&#39;' + it.id + '&#39;, this.checked)">'
           + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(it.label) + '</span>'
-          + trailing
+          + templateIcon
+          + repeatSelect
           + '</label>'
       }).join('')
       return '<div class="flex-1 min-w-0"><div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">' + g.label + '</div>'
