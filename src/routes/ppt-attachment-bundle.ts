@@ -74,6 +74,7 @@
 import { Hono } from 'hono'
 import type JSZip from 'jszip'
 import { query } from '../db/client.js'
+import type { AttachmentBuildKind } from '../lib/attachment-build-kind.js'
 import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip, type FreeCareerOptions } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
@@ -105,23 +106,26 @@ function validateStampType(form: FormData): CompanyStampType {
 /** 첨부 항목 레지스트리 — 나중에 새 첨부가 생기면 여기에 한 줄만 추가하면 된다.
  *  build()의 titlePrefix는 이 항목이 선택된 순서에서 몇 번째인지("1. " 등)이며, 각 항목의
  *  실제 슬라이드 제목([제목] 자리)에 그대로 반영된다 — 표지 목차 번호와 맞춰서.
- *  personnelScoped: true인 항목만 build()의 personnelNameFilter로 "이 사람만" 생성할 수
- *  있다 — "정렬 기준: 인력별"(2026-09-10 사용자 확인)에서 "인력만큼" 반복 항목을 사람
- *  단위로 묶을 때 쓴다. 이 사람이 그 서류에 해당 없으면(예: 동의서는 비상근만 대상) build가
- *  null을 반환하고, 그러면 그 사람 아래에는 그냥 안 넣고 건너뛴다. personnelScoped가 아닌
- *  항목(회사서류/표 형태 등 — 애초에 사람 단위 개념이 없는 문서)은 이 인자를 무시하고
- *  항상 사업 전체 기준 동일한 내용을 만든다 — "인력만큼"으로 설정돼도 그 결과를 사람마다
- *  그대로 재사용해서 묶는다(자세한 건 buildSectionsByPersonnel 참고). */
+ *  buildKind는 이 항목이 실제로 "어떻게 만들어지는지" 3가지 중 어디에 속하는지 나타낸다
+ *  (자세한 설명은 attachment-build-kind.ts 참고, 2026-09-10 사용자 확인 — "지금까지의
+ *  첨부 서류들을 이 3가지 버전으로 분류해"). 그중 PERSON_PAGES인 항목만 build()의
+ *  personnelNameFilter로 "이 사람만" 생성할 수 있다 — "정렬 기준: 인력별"에서 "인력만큼"
+ *  반복 항목을 사람 단위로 묶을 때 쓴다. 이 사람이 그 서류에 해당 없으면(예: 동의서는
+ *  비상근만 대상) build가 null을 반환하고, 그러면 그 사람 아래에는 그냥 안 넣고 건너뛴다.
+ *  PERSON_PAGES가 아닌 항목(회사서류/표 형태 등 — 애초에 사람 단위 개념이 없는 문서)은
+ *  이 인자를 무시하고 항상 사업 전체 기준 동일한 내용을 만든다 — "인력만큼"으로 설정돼도
+ *  그 결과를 사람마다 그대로 재사용해서 묶는다(자세한 건 buildSectionsByPersonnel 참고). */
 const ATTACHMENT_TYPES: Record<
   string,
   {
     label: string
-    personnelScoped?: boolean
+    buildKind: AttachmentBuildKind
     build: (buf: Buffer, projectId: number, form: FormData, titlePrefix: string, personnelNameFilter?: string[]) => Promise<JSZip | null>
   }
 > = {
   schedule: {
     label: '감리원 일정 현황표',
+    buildKind: 'SHARED_TABLE',
     build: async (buf, projectId, form, titlePrefix) => {
       let additionalPhaseIds: number[] = []
       const raw = form.get('additionalPhaseIds')
@@ -135,7 +139,7 @@ const ATTACHMENT_TYPES: Record<
   },
   career: {
     label: '투입 감리원별 실적 및 경력',
-    personnelScoped: true,
+    buildKind: 'PERSON_PAGES',
     build: async (buf, projectId, form, titlePrefix, personnelNameFilter) => {
       const onePage = form.get('careerOnePage') === 'true'
       let freeOpts: FreeCareerOptions | undefined
@@ -155,7 +159,7 @@ const ATTACHMENT_TYPES: Record<
   },
   consent: {
     label: '비상근 감리원 참여 동의서',
-    personnelScoped: true,
+    buildKind: 'PERSON_PAGES',
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
       const result = await buildConsentZip(buf, projectId, titlePrefix, personnelNameFilter)
       return result ? result.zip : null
@@ -163,10 +167,12 @@ const ATTACHMENT_TYPES: Record<
   },
   financial: {
     label: '표준재무제표',
+    buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, _form, titlePrefix) => (await buildFinancialStatementZip(buf, projectId, titlePrefix)).zip,
   },
   bizreg: {
     label: '사업자등록증',
+    buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
       const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType, titlePrefix)
@@ -175,6 +181,7 @@ const ATTACHMENT_TYPES: Record<
   },
   taxcert: {
     label: '국세 납세증명서',
+    buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
       const { zip } = await buildTaxCertificateZip(buf, projectId, stampType, titlePrefix)
@@ -183,6 +190,7 @@ const ATTACHMENT_TYPES: Record<
   },
   localtaxcert: {
     label: '지방세 납세증명서',
+    buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
       const { zip } = await buildLocalTaxCertificateZip(buf, projectId, stampType, titlePrefix)
@@ -191,6 +199,7 @@ const ATTACHMENT_TYPES: Record<
   },
   corpregistry: {
     label: '법인등기부등본',
+    buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
       const includeCancelledRaw = form.get('corpRegistryIncludeCancelled')
@@ -203,6 +212,7 @@ const ATTACHMENT_TYPES: Record<
   },
   insurance: {
     label: '4대보험 가입확인서',
+    buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
       const { zip } = await buildInsuranceEnrollmentZip(buf, projectId, stampType, titlePrefix)
@@ -211,7 +221,7 @@ const ATTACHMENT_TYPES: Record<
   },
   employmentCert: {
     label: '재직증명서',
-    personnelScoped: true,
+    buildKind: 'PERSON_PAGES',
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
       const result = await buildEmploymentCertificateZip(buf, projectId, titlePrefix, personnelNameFilter)
       return result ? result.zip : null
@@ -219,7 +229,7 @@ const ATTACHMENT_TYPES: Record<
   },
   careerCert: {
     label: '경력증명서',
-    personnelScoped: true,
+    buildKind: 'PERSON_PAGES',
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
       const result = await buildCareerCertificateZip(buf, projectId, titlePrefix, personnelNameFilter)
       return result ? result.zip : null
@@ -227,6 +237,7 @@ const ATTACHMENT_TYPES: Record<
   },
   staffingStatus: {
     label: '상근감리원인력현황',
+    buildKind: 'SHARED_TABLE',
     build: async (buf, projectId, _form, titlePrefix) => (await buildStaffingStatusZip(buf, projectId, titlePrefix)).zip,
   },
 }
@@ -288,14 +299,15 @@ async function buildSectionsWithLog(order: string[], form: FormData, projectId: 
  * 단위로 묶고("이 사업에 투입된 인력" 전원을 기준 순서로), 그 뒤에 repeatMode가 'one'인
  * 항목들을 지금까지처럼 항목당 한 번씩 나열한다.
  *
- * 항목마다 "사람 단위 개념이 있는지"가 다르다:
- *   - personnelScoped 항목(경력/동의서/재직증명서/경력증명서)은 사람마다 실제로 다시
- *     생성한다(build를 그 사람 이름으로 필터링해서 호출) — 이 사람이 그 서류 대상이
- *     아니면(예: 동의서는 비상근만) build가 null을 반환하고, 그러면 조용히 건너뛴다
- *     (2026-09-10 사용자 확인 — "해당되는 서류만 넘기고 나머지는 건너뛴다").
- *   - 그 외(회사서류/표 형태 등, 애초에 사람과 무관한 문서)는 한 번만 생성해서, 그 결과를
- *     모든 사람 아래에 그대로 재사용한다(같은 내용을 사람 수만큼 다시 만드는 대신 —
- *     mergeDecksSharingMaster는 같은 zip을 여러 번 합쳐도 안전하다, pptx-merge.ts 참고).
+ * 항목마다 "사람 단위 개념이 있는지"가 다르다(attachment-build-kind.ts 참고):
+ *   - buildKind === 'PERSON_PAGES' 항목(경력/동의서/재직증명서/경력증명서)은 사람마다
+ *     실제로 다시 생성한다(build를 그 사람 이름으로 필터링해서 호출) — 이 사람이 그
+ *     서류 대상이 아니면(예: 동의서는 비상근만) build가 null을 반환하고, 그러면 조용히
+ *     건너뛴다(2026-09-10 사용자 확인 — "해당되는 서류만 넘기고 나머지는 건너뛴다").
+ *   - 그 외(IMAGE_REPLACE/SHARED_TABLE — 회사서류/표 형태 등, 애초에 사람과 무관한 문서)는
+ *     한 번만 생성해서, 그 결과를 모든 사람 아래에 그대로 재사용한다(같은 내용을 사람
+ *     수만큼 다시 만드는 대신 — mergeDecksSharingMaster는 같은 zip을 여러 번 합쳐도
+ *     안전하다, pptx-merge.ts 참고).
  */
 async function buildSectionsByPersonnel(
   order: string[],
@@ -319,8 +331,8 @@ async function buildSectionsByPersonnel(
     if (!rosterNames.length) {
       for (const id of groupIds) log.push({ id, label: ATTACHMENT_TYPES[id].label, ok: false, error: '이 사업에 투입된 인력이 없습니다' })
     } else {
-      // 항목별로 "사람 이름 → zip"(personnelScoped) 또는 zip 하나(그 외, 전원 공용)를 먼저
-      // 만들어둔다 — personnelScoped가 아닌 항목을 사람 수만큼 반복 생성하는 낭비를 피한다.
+      // 항목별로 "사람 이름 → zip"(PERSON_PAGES) 또는 zip 하나(그 외, 전원 공용)를 먼저
+      // 만들어둔다 — PERSON_PAGES가 아닌 항목을 사람 수만큼 반복 생성하는 낭비를 피한다.
       const perIdSource = new Map<string, Map<string, JSZip> | JSZip | null>()
       for (const id of groupIds) {
         const def = ATTACHMENT_TYPES[id]
@@ -331,7 +343,7 @@ async function buildSectionsByPersonnel(
           continue
         }
         const buf = Buffer.from(await file.arrayBuffer())
-        if (!def.personnelScoped) {
+        if (def.buildKind !== 'PERSON_PAGES') {
           try {
             const zip = await def.build(buf, projectId, form, '')
             perIdSource.set(id, zip)

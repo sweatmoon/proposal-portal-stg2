@@ -27,6 +27,7 @@
 import { Hono } from 'hono'
 import { query, queryOne } from '../db/client.js'
 import { inflateRawSync } from 'zlib'
+import { isAttachmentBuildKind, type AttachmentBuildKind } from '../lib/attachment-build-kind.js'
 
 const app = new Hono()
 
@@ -250,6 +251,12 @@ app.post('/migrate', async (c) => {
 
     // 10. ppt_menus 에 category 컬럼 추가 (proposal / attachment 구분, 구버전 호환)
     await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'proposal'`)
+
+    // 11. ppt_menus 에 build_kind 컬럼 추가 — 첨부 항목이 실제로 어떻게 만들어지는지 3가지
+    // 분류(PERSON_PAGES/IMAGE_REPLACE/SHARED_TABLE, src/lib/attachment-build-kind.ts 참고)
+    // 중 어디에 속하는지 표시하는 가벼운 태그. proposal 카테고리 메뉴에는 해당 없어 NULL로
+    // 둔다(2026-09-10 사용자 확인 — "템플릿(첨부/서류 항목)도 저 3가지로 가볍게 분류해줘").
+    await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS build_kind TEXT`)
 
     return c.json({ ok: true, message: 'PPT 테이블 마이그레이션 완료 (8개 테이블 + 컬럼 업그레이드)' })
   } catch (e: unknown) {
@@ -761,6 +768,7 @@ app.get('/', async (c) => {
     const menus = await query<{
       id: number; parent_id: number | null; menu_code: string; menu_name: string
       menu_number: string | null; sort_order: number; is_enabled: number; category: string
+      build_kind: string | null
     }>(
       cat
         ? `SELECT * FROM ppt_menus WHERE category=$1 ORDER BY sort_order ASC, id ASC`
@@ -823,28 +831,31 @@ app.get('/', async (c) => {
  *  멱등(ON CONFLICT DO UPDATE)이므로 반복 실행 안전. */
 app.post('/attachment-seed', async (c) => {
   try {
-    // 첨부PPT 항목 정의 (attachment-bundle-widget.ts 의 BUNDLE_ITEM_DEFS 와 동일 순서)
-    const ITEMS = [
-      { code: 'ATT_COVER',        name: '0. 정성제안서 첨부 표지',       sort:  0 },
-      { code: 'ATT_SCHEDULE',     name: '감리원 일정 현황표',             sort: 10 },
-      { code: 'ATT_CAREER',       name: '투입 감리원별 실적 및 경력',     sort: 20 },
-      { code: 'ATT_CONSENT',      name: '비상근 감리원 참여 동의서',      sort: 30 },
-      { code: 'ATT_STAMP_NO',     name: '범용 템플릿(도장X)',             sort: 40 },
-      { code: 'ATT_STAMP_YES',    name: '범용 템플릿(도장O)',             sort: 50 },
-      { code: 'ATT_EMPLOYMENT',   name: '재직증명서',                     sort: 60 },
-      { code: 'ATT_CAREER_CERT',  name: '경력증명서',                     sort: 70 },
-      { code: 'ATT_STAFFING',     name: '상근감리원인력현황',             sort: 80 },
+    // 첨부PPT 항목 정의 (attachment-bundle-widget.ts 의 BUNDLE_ITEM_DEFS 와 동일 순서).
+    // kind: attachment-build-kind.ts의 3가지 분류 중 이 항목이 실제로 어떻게 만들어지는지
+    // (2026-09-10 사용자 확인). 표지는 인력/이미지와 무관하게 텍스트만 치환해 셋 중 어디에도
+    // 안 맞으므로 null로 둔다.
+    const ITEMS: { code: string; name: string; sort: number; kind: AttachmentBuildKind | null }[] = [
+      { code: 'ATT_COVER',        name: '0. 정성제안서 첨부 표지',       sort:  0, kind: null },
+      { code: 'ATT_SCHEDULE',     name: '감리원 일정 현황표',             sort: 10, kind: 'SHARED_TABLE' },
+      { code: 'ATT_CAREER',       name: '투입 감리원별 실적 및 경력',     sort: 20, kind: 'PERSON_PAGES' },
+      { code: 'ATT_CONSENT',      name: '비상근 감리원 참여 동의서',      sort: 30, kind: 'PERSON_PAGES' },
+      { code: 'ATT_STAMP_NO',     name: '범용 템플릿(도장X)',             sort: 40, kind: 'IMAGE_REPLACE' },
+      { code: 'ATT_STAMP_YES',    name: '범용 템플릿(도장O)',             sort: 50, kind: 'IMAGE_REPLACE' },
+      { code: 'ATT_EMPLOYMENT',   name: '재직증명서',                     sort: 60, kind: 'PERSON_PAGES' },
+      { code: 'ATT_CAREER_CERT',  name: '경력증명서',                     sort: 70, kind: 'PERSON_PAGES' },
+      { code: 'ATT_STAFFING',     name: '상근감리원인력현황',             sort: 80, kind: 'SHARED_TABLE' },
     ]
     const created: string[] = []
     for (const item of ITEMS) {
       // 1. 메뉴 upsert
       const menu = await queryOne<{ id: number }>(`
-        INSERT INTO ppt_menus (menu_code, menu_name, sort_order, is_enabled, category)
-        VALUES ($1, $2, $3, 1, 'attachment')
+        INSERT INTO ppt_menus (menu_code, menu_name, sort_order, is_enabled, category, build_kind)
+        VALUES ($1, $2, $3, 1, 'attachment', $4)
         ON CONFLICT (menu_code) DO UPDATE
-          SET menu_name=$2, sort_order=$3, category='attachment', updated_at=NOW()
+          SET menu_name=$2, sort_order=$3, category='attachment', build_kind=$4, updated_at=NOW()
         RETURNING id
-      `, [item.code, item.name, item.sort])
+      `, [item.code, item.name, item.sort, item.kind])
       if (!menu) continue
       // 2. 빈 템플릿 슬롯 upsert (pptx_b64_key=NULL 인 채로 자리만 만들어 둠)
       await exec(`
@@ -902,15 +913,21 @@ app.post('/restore', async (c) => {
   }
 })
 
-/** POST /api/ppt-menus */
+/** POST /api/ppt-menus
+ *  category('proposal'|'attachment', 생략 시 기존처럼 컬럼 기본값 'proposal')와 build_kind
+ *  (attachment 항목일 때만 의미 있음, attachment-build-kind.ts 참고)를 새로 받는다 —
+ *  PPT 템플릿 관리 첨부 탭의 "항목 추가"가 category='attachment'로 호출한다. */
 app.post('/', async (c) => {
   try {
     const body = await c.req.json()
-    const { parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled } = body
+    const { parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind } = body
+    if (build_kind != null && !isAttachmentBuildKind(build_kind)) {
+      return c.json({ ok: false, error: `알 수 없는 build_kind: ${build_kind}` }, 400)
+    }
     const row = await queryOne<{ id: number }>(`
-      INSERT INTO ppt_menus (parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled)
-      VALUES ($1,$2,$3,$4,$5,$6) RETURNING id
-    `, [parent_id ?? null, menu_code, menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1])
+      INSERT INTO ppt_menus (parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind)
+      VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7,'proposal'), $8) RETURNING id
+    `, [parent_id ?? null, menu_code, menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, category ?? null, build_kind ?? null])
     return c.json({ ok: true, id: row?.id })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -918,17 +935,22 @@ app.post('/', async (c) => {
   }
 })
 
-/** PUT /api/ppt-menus/:id */
+/** PUT /api/ppt-menus/:id
+ *  build_kind도 갱신 가능(생략하면 기존 값 유지) — 첨부 탭에서 항목의 분류를 바꿀 때 씀. */
 app.put('/:id', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const body = await c.req.json()
-    const { menu_name, menu_number, sort_order, is_enabled, parent_id } = body
+    const { menu_name, menu_number, sort_order, is_enabled, parent_id, build_kind } = body
+    if (build_kind !== undefined && build_kind !== null && !isAttachmentBuildKind(build_kind)) {
+      return c.json({ ok: false, error: `알 수 없는 build_kind: ${build_kind}` }, 400)
+    }
     await exec(`
       UPDATE ppt_menus
-      SET menu_name=$1, menu_number=$2, sort_order=$3, is_enabled=$4, parent_id=$5, updated_at=NOW()
-      WHERE id=$6
-    `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, id])
+      SET menu_name=$1, menu_number=$2, sort_order=$3, is_enabled=$4, parent_id=$5,
+          build_kind=COALESCE($6, build_kind), updated_at=NOW()
+      WHERE id=$7
+    `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, build_kind ?? null, id])
     return c.json({ ok: true })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

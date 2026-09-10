@@ -3148,6 +3148,16 @@ app.get('/ppt-templates', async (c) => {
               <input id="modalSortOrder" type="number" value="100" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
             </div>
           </div>
+          <!-- 첨부 탭에서 항목을 추가/편집할 때만 보임 — 이 항목이 실제로 어떻게 만들어지는지
+               3가지 분류(attachment-build-kind.ts, 2026-09-10 사용자 확인) 중 하나를 고른다. -->
+          <div id="modalBuildKindWrap" class="hidden">
+            <label class="text-xs text-slate-500 font-medium mb-1 block">분류 (생성 방식)</label>
+            <select id="modalBuildKind" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+              <option value="PERSON_PAGES">인력별 페이지 — 인력 수만큼 슬라이드 복제 + 플레이스홀더 치환</option>
+              <option value="IMAGE_REPLACE">이미지 치환 — PPT/PDF 원본을 이미지로 추출해 치환</option>
+              <option value="SHARED_TABLE">공용 표 — 한 페이지의 표를 인력별로 다르게 구성</option>
+            </select>
+          </div>
           <div class="flex items-center gap-2">
             <input id="modalIsEnabled" type="checkbox" checked class="w-4 h-4 accent-indigo-600">
             <label class="text-sm text-slate-600">사용 여부</label>
@@ -3171,11 +3181,21 @@ app.get('/ppt-templates', async (c) => {
   const TAB_ACTIVE   = 'px-5 py-2.5 text-sm font-semibold rounded-t-lg transition border border-b-0 -mb-px bg-white text-indigo-600 border-slate-200'
   const TAB_INACTIVE = 'px-5 py-2.5 text-sm font-semibold rounded-t-lg transition border border-b-0 -mb-px bg-slate-50 text-slate-500 border-transparent hover:text-slate-700'
 
+  // 첨부 항목이 실제로 어떻게 만들어지는지 3가지 분류(src/lib/attachment-build-kind.ts와
+  // 동일한 이름/설명, 2026-09-10 사용자 확인 — "지금까지의 첨부 서류들을 이 3가지 버전으로
+  // 분류해"). 서버가 내려주는 menu.build_kind 값을 그대로 키로 쓴다.
+  const BUILD_KIND_LABELS = {
+    PERSON_PAGES:  '인력별 페이지',
+    IMAGE_REPLACE: '이미지 치환',
+    SHARED_TABLE:  '공용 표',
+  }
+
   const HDR_PROPOSAL = '<button onclick=\\"runMigrate()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition\\"><i class=\\"fas fa-database mr-1\\"></i>테이블 생성</button>'
     + '<button onclick=\\"runSeed()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 transition\\"><i class=\\"fas fa-seedling mr-1\\"></i>기본 메뉴 시드</button>'
     + '<button onclick=\\"openMasterModal()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-violet-600 hover:bg-violet-700 text-white transition\\"><i class=\\"fas fa-layer-group mr-1\\"></i>마스터 템플릿</button>'
   const HDR_ATTACHMENT = '<button onclick=\\"runMigrate()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition\\"><i class=\\"fas fa-database mr-1\\"></i>테이블 생성</button>'
     + '<button onclick=\\"runAttachmentSeed()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-300 transition\\"><i class=\\"fas fa-paperclip mr-1\\"></i>첨부 항목 초기화</button>'
+    + '<button onclick=\\"openAddMenu()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition\\"><i class=\\"fas fa-plus mr-1\\"></i>항목 추가</button>'
 
   function switchTab(tab) {
     _activeTab = tab
@@ -3241,11 +3261,66 @@ app.get('/ppt-templates', async (c) => {
     }
   }
 
+  // 첨부 탭 전용 — 항목을 분류(build_kind)별로 묶어서 보여준다(2026-09-10 사용자 확인 —
+  // "첨부표지 / -변수명1 항목... / -변수명2 항목... / -변수명3 항목..." 형태로 나누라는 요청).
+  // 표지처럼 분류가 없는 항목은 맨 위에 그대로, 나머지는 ATTACHMENT_GROUP_ORDER 순서로
+  // 분류 이름 소제목 아래에 나열한다. proposal 탭의 parent_id 기반 트리와 달리 이 그룹핑은
+  // DB에 저장된 계층이 아니라 build_kind 값으로 그때그때 계산하는 화면 전용 구조다.
+  const ATTACHMENT_GROUP_ORDER = ['PERSON_PAGES', 'IMAGE_REPLACE', 'SHARED_TABLE']
+
+  function renderAttachmentItemRow(n, depth) {
+    const hasTemplate = n.templates && n.templates[0] && !!n.templates[0].pptx_b64_key
+    const badgeColor = hasTemplate ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
+    const badge = hasTemplate ? '등록' : '미등록'
+    const iconCls = hasTemplate ? 'fa-file-powerpoint text-teal-400' : 'fa-file text-slate-300'
+    const selectedCls = _selectedMenuId === n.id ? 'bg-teal-50 border border-teal-200' : 'hover:bg-slate-50 border border-transparent'
+    return \`
+      <div class="menu-item rounded-lg mb-0.5 \${selectedCls} cursor-pointer transition-all"
+           style="padding-left:\${depth * 14 + 8}px"
+           onclick="selectMenu(\${n.id})">
+        <div class="flex items-center gap-1.5 py-1.5 pr-2">
+          <i class="fas \${iconCls} text-xs flex-shrink-0"></i>
+          <span class="text-xs \${n.is_enabled ? 'text-slate-700' : 'text-slate-400 line-through'} flex-1 min-w-0 truncate" title="\${n.menu_name}">
+            \${n.menu_name}
+          </span>
+          <span class="text-xs px-1.5 py-0.5 rounded-full font-medium \${badgeColor} flex-shrink-0">\${badge}</span>
+        </div>
+      </div>
+    \`
+  }
+
+  function renderAttachmentGroupHeader(label) {
+    return \`
+      <div class="flex items-center gap-1.5 px-2 py-1.5 mt-2 mb-0.5">
+        <i class="fas fa-layer-group text-slate-400 text-xs"></i>
+        <span class="text-xs font-bold text-slate-500">\${label}</span>
+      </div>
+    \`
+  }
+
+  function renderAttachmentTree(nodes) {
+    const ungrouped = nodes.filter(n => !n.build_kind)
+    let html = ungrouped.map(n => renderAttachmentItemRow(n, 0)).join('')
+    ATTACHMENT_GROUP_ORDER.forEach(kind => {
+      const items = nodes.filter(n => n.build_kind === kind)
+      html += renderAttachmentGroupHeader(BUILD_KIND_LABELS[kind] || kind)
+      html += items.length
+        ? items.map(n => renderAttachmentItemRow(n, 1)).join('')
+        : '<div class="text-xs text-slate-300 px-2 py-1" style="padding-left:22px">항목 없음</div>'
+    })
+    return html
+  }
+
   function renderTree(nodes, depth = 0) {
     if (depth === 0) document.getElementById('menuTree').innerHTML = ''
     const container = depth === 0 ? document.getElementById('menuTree') : null
-    let html = ''
     const isAttachmentTab = (_activeTab === 'attachment')
+    if (isAttachmentTab && depth === 0) {
+      const html = renderAttachmentTree(nodes)
+      if (container) container.innerHTML = html
+      return html
+    }
+    let html = ''
     nodes.forEach(n => {
       // attachment 탭은 parent_id 관계없이 모두 직접 클릭 가능한 항목으로 취급
       const isSection = isAttachmentTab ? false : !n.parent_id
@@ -3494,10 +3569,24 @@ app.get('/ppt-templates', async (c) => {
       <div class="p-6 h-full overflow-y-auto">
 
         <!-- 항목 이름 -->
-        <div class="flex items-center gap-2 mb-5">
+        <div class="flex items-center gap-2 mb-2">
           <i class="fas fa-paperclip text-teal-400 text-lg"></i>
           <h2 class="text-base font-bold text-slate-800">\${menu.menu_name}</h2>
           <code class="text-xs bg-teal-50 text-teal-500 px-2 py-0.5 rounded ml-auto">\${menu.menu_code}</code>
+        </div>
+
+        <!-- 분류(build_kind) + 편집/삭제 -->
+        <div class="flex items-center gap-2 mb-5">
+          \${menu.build_kind
+            ? \`<span class="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-600">\${BUILD_KIND_LABELS[menu.build_kind] || menu.build_kind}</span>\`
+            : '<span class="text-xs px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-400">분류 없음</span>'
+          }
+          <button onclick="openEditMenu(\${menu.id})" class="ml-auto text-xs px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 transition">
+            <i class="fas fa-pen mr-1"></i>편집
+          </button>
+          <button onclick="deleteMenu(\${menu.id})" class="text-xs px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-500 border border-red-200 transition">
+            <i class="fas fa-trash mr-1"></i>항목 삭제
+          </button>
         </div>
 
         <!-- 현재 템플릿 상태 -->
@@ -3783,8 +3872,10 @@ app.get('/ppt-templates', async (c) => {
   }
 
   // ── 메뉴 추가/편집 모달 ────────────────────────────────────────
+  // 분류(build_kind) 필드는 첨부 탭에서만 의미가 있다 — 서류(proposal) 탭 메뉴는
+  // ppt_generation_rules로 별도 생성 규칙을 관리하므로 이 필드가 필요 없다.
   function openAddMenu() {
-    document.getElementById('menuModalTitle').textContent = '메뉴 추가'
+    document.getElementById('menuModalTitle').textContent = _activeTab === 'attachment' ? '첨부 항목 추가' : '메뉴 추가'
     document.getElementById('modalMenuId').value = ''
     document.getElementById('modalParentId').value = ''
     document.getElementById('modalMenuCode').value = ''
@@ -3792,6 +3883,8 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('modalMenuNumber').value = ''
     document.getElementById('modalSortOrder').value = '100'
     document.getElementById('modalIsEnabled').checked = true
+    document.getElementById('modalBuildKindWrap').classList.toggle('hidden', _activeTab !== 'attachment')
+    document.getElementById('modalBuildKind').value = 'PERSON_PAGES'
     document.getElementById('menuModal').classList.remove('hidden')
   }
 
@@ -3806,6 +3899,8 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('modalMenuNumber').value = menu.menu_number || ''
     document.getElementById('modalSortOrder').value = menu.sort_order
     document.getElementById('modalIsEnabled').checked = !!menu.is_enabled
+    document.getElementById('modalBuildKindWrap').classList.toggle('hidden', _activeTab !== 'attachment')
+    document.getElementById('modalBuildKind').value = menu.build_kind || 'PERSON_PAGES'
     document.getElementById('menuModal').classList.remove('hidden')
   }
 
@@ -3820,6 +3915,8 @@ app.get('/ppt-templates', async (c) => {
       menu_number: document.getElementById('modalMenuNumber').value || null,
       sort_order:  parseInt(document.getElementById('modalSortOrder').value) || 0,
       is_enabled:  document.getElementById('modalIsEnabled').checked ? 1 : 0,
+      category:    _activeTab,
+      build_kind:  _activeTab === 'attachment' ? document.getElementById('modalBuildKind').value : null,
     }
     if (!body.menu_code || !body.menu_name) { showAlert('메뉴 코드와 이름은 필수입니다', false); return }
     const url    = id ? '/api/ppt-menus/' + id : '/api/ppt-menus'
