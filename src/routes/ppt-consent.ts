@@ -91,15 +91,24 @@ export interface ConsentZipResult {
 
 /** 이 파일의 핵심 로직 — 단독 다운로드 라우트와 첨부 묶음 라우트 양쪽에서 호출한다.
  *  titlePrefix: 첨부PPT 묶음에서 이 항목이 몇 번째로 선택됐는지("3. " 등)를 제목 앞에 붙인다
- *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다). */
-export async function buildConsentZip(templateBuf: Buffer, projectId: number, titlePrefix = ''): Promise<ConsentZipResult> {
+ *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다).
+ *  personnelNameFilter: "정렬 기준: 인력별" 모드에서 이 문서를 사람마다 한 장씩 따로 만들
+ *  때 쓴다(2026-09-10 사용자 확인). 넘긴 이름 중 비상근 인력이 하나도 없으면(동의서는
+ *  애초에 비상근만 대상이라 흔한 경우) 에러 대신 null을 반환해 "이 사람은 동의서 대상이
+ *  아님 — 건너뜀"으로 처리할 수 있게 한다. */
+export async function buildConsentZip(
+  templateBuf: Buffer,
+  projectId: number,
+  titlePrefix = '',
+  personnelNameFilter?: string[]
+): Promise<ConsentZipResult | null> {
     const project = await queryOne<Record<string, unknown>>(
       `SELECT project_name, client_org, bid_deadline FROM audit_projects WHERE id = $1`,
       [projectId]
     )
     if (!project) throw new Error('사업을 찾을 수 없습니다')
 
-    const people = await query<NonFulltimePerson>(
+    let people = await query<NonFulltimePerson>(
       `SELECT pm.person_name, pm.domain, per.birthdate
        FROM proposal_members pm
        LEFT JOIN personnel per ON per.id = pm.personnel_id
@@ -109,6 +118,12 @@ export async function buildConsentZip(templateBuf: Buffer, projectId: number, ti
     )
     if (!people.length) {
       throw new Error('이 사업에 투입된 비상근 인력이 없습니다')
+    }
+
+    if (personnelNameFilter) {
+      const filterSet = new Set(personnelNameFilter)
+      people = people.filter(p => filterSet.has(p.person_name))
+      if (!people.length) return null
     }
 
     // ── 사업 공통 필드 (모든 슬라이드 공통) ─────────────────────
@@ -188,7 +203,9 @@ app.post('/:projectId', async (c) => {
     }
 
     const templateBuf = Buffer.from(await file.arrayBuffer())
-    const { zip, peopleCount, projectName } = await buildConsentZip(templateBuf, projectId)
+    const result = await buildConsentZip(templateBuf, projectId)
+    if (!result) throw new Error('이 사업에 투입된 비상근 인력이 없습니다')
+    const { zip, peopleCount, projectName } = result
 
     const outBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } })
     const safeName = projectName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)

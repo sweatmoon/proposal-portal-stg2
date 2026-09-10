@@ -67,14 +67,19 @@ export interface EmployeeCertificateZipResult {
 }
 
 /** titlePrefix: 첨부PPT 묶음에서 이 항목이 몇 번째로 선택됐는지("6. " 등)를 제목 앞에 붙인다
- *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다). */
+ *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다).
+ *  personnelNameFilter: "정렬 기준: 인력별" 모드에서 이 문서를 사람마다 한 장씩 따로 만들
+ *  때 쓴다(2026-09-10 사용자 확인). 넘긴 사람이 이 사업 인력이 아니거나, 재직증명서
+ *  발행파일에서 매칭이 안 되거나 퇴직 처리돼 있으면 에러 대신 null을 반환해 "이 사람은
+ *  이 서류 대상이 아님 — 건너뜀"으로 처리할 수 있게 한다. */
 export async function buildEmployeeCertificateZip(
   templateBuf: Buffer,
   projectId: number,
   pageTitle: string,
-  titlePrefix = ''
-): Promise<EmployeeCertificateZipResult> {
-  const [project, members, sourceXlsx] = await Promise.all([
+  titlePrefix = '',
+  personnelNameFilter?: string[]
+): Promise<EmployeeCertificateZipResult | null> {
+  const [project, allMembers, sourceXlsx] = await Promise.all([
     queryOne<{ project_name: string; bid_deadline: string | null }>(
       `SELECT project_name, bid_deadline FROM audit_projects WHERE id = $1`,
       [projectId]
@@ -83,9 +88,16 @@ export async function buildEmployeeCertificateZip(
     fetchEmploymentCertificateSourceXlsx(),
   ])
   if (!project) throw new Error('사업을 찾을 수 없습니다')
-  if (!members.length) throw new Error('이 사업에 투입된 인력이 없습니다')
+  if (!allMembers.length) throw new Error('이 사업에 투입된 인력이 없습니다')
   if (!sourceXlsx) throw new Error('NAS에서 재직증명서 발행파일을 가져오지 못했습니다')
   if (!project.bid_deadline) throw new Error('이 사업의 입찰마감일이 등록돼 있지 않습니다 (재직기간 계산에 필요합니다)')
+
+  let members = allMembers
+  if (personnelNameFilter) {
+    const filterSet = new Set(personnelNameFilter)
+    members = members.filter(m => filterSet.has(m.person_name))
+    if (!members.length) return null
+  }
 
   const deadlineMinusOne = dayBeforeDeadlineKorean(project.bid_deadline)
   const directory = await loadEmployeeDirectory(sourceXlsx)
@@ -110,6 +122,7 @@ export async function buildEmployeeCertificateZip(
   }
 
   if (!chunks.length) {
+    if (personnelNameFilter) return null
     throw new Error(`재직증명서 발행파일에서 매칭되는(재직 중인) 인력이 한 명도 없습니다 (${skipped.join(', ')})`)
   }
 

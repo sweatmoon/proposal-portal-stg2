@@ -2681,6 +2681,17 @@ app.get('/ppt-generate', (c) => {
       if (stampNeeded) fd.append('stampType', bundleStampType)
       if (corpNeeded) fd.append('corpRegistryIncludeCancelled', bundleCorpRegistryIncludeCancelled)
 
+      // 정렬 기준 + 항목별 인력만큼/하나만 — 서버는 repeatMode를 sortBasis가 '인력별'일 때만
+      // 사용한다(2026-09-10 사용자 확인). 드롭박스에 표시된(기본값 포함) 실제 값 그대로
+      // 보내야 서버가 항목별 기본값 표를 따로 안 둬도 된다.
+      fd.append('sortBasis', bundleSortBasis)
+      var repeatModeToSend = {}
+      order.forEach(function(o) {
+        var defaultMode = o.catalog.perPerson ? 'all' : 'one'
+        repeatModeToSend[o.key] = bundleRepeatMode[o.catalog.id] || defaultMode
+      })
+      fd.append('repeatMode', JSON.stringify(repeatModeToSend))
+
       // 키워드 치환 맵 전달
       var kwMap = collectKeywords()
       if (Object.keys(kwMap).length) {

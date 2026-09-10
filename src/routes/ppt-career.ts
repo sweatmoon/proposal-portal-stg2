@@ -304,13 +304,23 @@ export interface FreeCareerOptions {
   personnelNames: { name: string; domain: string }[]
 }
 
+/**
+ * personnelNameFilter: "정렬 기준: 인력별" 모드에서 이 문서 한 종류를 사람마다 한 장씩
+ * 따로 만들어서 다른 문서들과 person 단위로 묶을 때 쓴다(2026-09-10 사용자 확인 —
+ * "인력만큼이라고 지정된 애들만... 해당되는 서류만 넘기고 나머지는 건너뛴다"). 넘기면
+ * members를 그 이름(들)만으로 좁히고, 그 결과 아무도 안 남으면(예: 이 사업 인력이긴
+ * 하지만 personnel DB에 매칭이 안 되는 경우) 에러 대신 null을 반환해 "이 사람은 이
+ * 서류에 해당 없음 — 건너뜀"으로 처리할 수 있게 한다. 필터가 없으면(기존 호출 — 단독
+ * 다운로드/서류별 모드) 지금까지처럼 인력이 아예 없을 때만 에러를 던진다.
+ */
 export async function buildCareerZip(
   templateBuf: Buffer,
   projectId: number,
   titlePrefix = '',
   onePage = false,
-  freeOpts?: FreeCareerOptions
-): Promise<CareerZipResult> {
+  freeOpts?: FreeCareerOptions,
+  personnelNameFilter?: string[]
+): Promise<CareerZipResult | null> {
 
     // ── projectId=0: 자유 생성 모드 ──────────────────────────────
     // DB에서 사업/인력/키워드를 가져오는 대신, 호출자가 넘긴 값을 사용한다.
@@ -351,6 +361,12 @@ export async function buildCareerZip(
 
     if (!project) throw new Error('사업을 찾을 수 없습니다')
     if (!members.length) throw new Error('이 사업에 투입된 인력이 없습니다')
+
+    if (personnelNameFilter) {
+      const filterSet = new Set(personnelNameFilter)
+      members = members.filter(m => filterSet.has(m.person_name))
+      if (!members.length) return null
+    }
 
     // 인력마다 personnel 조회 1번 + 실적/IT경력/자격증 3번, 총 (인원수 × 4)번을 각자 따로
     // 왕복하면 원격 DB 환경에서 인원이 많을수록 선형으로 느려진다(2026-09-02 실측: 17명
@@ -680,7 +696,9 @@ app.post('/:projectId', async (c) => {
 
     const templateBuf = Buffer.from(await file.arrayBuffer())
     const onePage = form.get('onePage') === 'true'
-    const { zip, personCount, skipped, projectName } = await buildCareerZip(templateBuf, projectId, '', onePage)
+    const result = await buildCareerZip(templateBuf, projectId, '', onePage)
+    if (!result) throw new Error('이 사업에 투입된 인력이 없습니다')
+    const { zip, personCount, skipped, projectName } = result
 
     const outBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } })
     const safeName = projectName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)

@@ -73,6 +73,7 @@
  */
 import { Hono } from 'hono'
 import type JSZip from 'jszip'
+import { query } from '../db/client.js'
 import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip, type FreeCareerOptions } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
@@ -103,10 +104,21 @@ function validateStampType(form: FormData): CompanyStampType {
 
 /** 첨부 항목 레지스트리 — 나중에 새 첨부가 생기면 여기에 한 줄만 추가하면 된다.
  *  build()의 titlePrefix는 이 항목이 선택된 순서에서 몇 번째인지("1. " 등)이며, 각 항목의
- *  실제 슬라이드 제목([제목] 자리)에 그대로 반영된다 — 표지 목차 번호와 맞춰서. */
+ *  실제 슬라이드 제목([제목] 자리)에 그대로 반영된다 — 표지 목차 번호와 맞춰서.
+ *  personnelScoped: true인 항목만 build()의 personnelNameFilter로 "이 사람만" 생성할 수
+ *  있다 — "정렬 기준: 인력별"(2026-09-10 사용자 확인)에서 "인력만큼" 반복 항목을 사람
+ *  단위로 묶을 때 쓴다. 이 사람이 그 서류에 해당 없으면(예: 동의서는 비상근만 대상) build가
+ *  null을 반환하고, 그러면 그 사람 아래에는 그냥 안 넣고 건너뛴다. personnelScoped가 아닌
+ *  항목(회사서류/표 형태 등 — 애초에 사람 단위 개념이 없는 문서)은 이 인자를 무시하고
+ *  항상 사업 전체 기준 동일한 내용을 만든다 — "인력만큼"으로 설정돼도 그 결과를 사람마다
+ *  그대로 재사용해서 묶는다(자세한 건 buildSectionsByPersonnel 참고). */
 const ATTACHMENT_TYPES: Record<
   string,
-  { label: string; build: (buf: Buffer, projectId: number, form: FormData, titlePrefix: string) => Promise<JSZip> }
+  {
+    label: string
+    personnelScoped?: boolean
+    build: (buf: Buffer, projectId: number, form: FormData, titlePrefix: string, personnelNameFilter?: string[]) => Promise<JSZip | null>
+  }
 > = {
   schedule: {
     label: '감리원 일정 현황표',
@@ -123,7 +135,8 @@ const ATTACHMENT_TYPES: Record<
   },
   career: {
     label: '투입 감리원별 실적 및 경력',
-    build: async (buf, projectId, form, titlePrefix) => {
+    personnelScoped: true,
+    build: async (buf, projectId, form, titlePrefix, personnelNameFilter) => {
       const onePage = form.get('careerOnePage') === 'true'
       let freeOpts: FreeCareerOptions | undefined
       if (projectId === 0) {
@@ -136,12 +149,17 @@ const ATTACHMENT_TYPES: Record<
           personnelNames: namesRaw ? JSON.parse(namesRaw as string) : [],
         }
       }
-      return (await buildCareerZip(buf, projectId, titlePrefix, onePage, freeOpts)).zip
+      const result = await buildCareerZip(buf, projectId, titlePrefix, onePage, freeOpts, personnelNameFilter)
+      return result ? result.zip : null
     },
   },
   consent: {
     label: '비상근 감리원 참여 동의서',
-    build: async (buf, projectId, _form, titlePrefix) => (await buildConsentZip(buf, projectId, titlePrefix)).zip,
+    personnelScoped: true,
+    build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
+      const result = await buildConsentZip(buf, projectId, titlePrefix, personnelNameFilter)
+      return result ? result.zip : null
+    },
   },
   financial: {
     label: '표준재무제표',
@@ -193,11 +211,19 @@ const ATTACHMENT_TYPES: Record<
   },
   employmentCert: {
     label: '재직증명서',
-    build: async (buf, projectId, _form, titlePrefix) => (await buildEmploymentCertificateZip(buf, projectId, titlePrefix)).zip,
+    personnelScoped: true,
+    build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
+      const result = await buildEmploymentCertificateZip(buf, projectId, titlePrefix, personnelNameFilter)
+      return result ? result.zip : null
+    },
   },
   careerCert: {
     label: '경력증명서',
-    build: async (buf, projectId, _form, titlePrefix) => (await buildCareerCertificateZip(buf, projectId, titlePrefix)).zip,
+    personnelScoped: true,
+    build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
+      const result = await buildCareerCertificateZip(buf, projectId, titlePrefix, personnelNameFilter)
+      return result ? result.zip : null
+    },
   },
   staffingStatus: {
     label: '상근감리원인력현황',
@@ -223,8 +249,10 @@ interface BuildSectionsResult {
  *  템플릿 누락 등) 전체를 막지 않고 그 항목만 건너뛰고 계속 진행한다 — 결과 로그로 어떤
  *  항목이 왜 빠졌는지 보여주기 위함(2026-09-09 사용자 확인 — "제대로 생성됐는지 어떤
  *  부분이 왜 생성이 안됐는지 그런거 보여주기"). 제목 앞 번호(`${n}. `)는 실제로 성공한
- *  항목들 기준으로 다시 매긴다(건너뛴 항목 때문에 번호가 비지 않도록). */
-async function buildSectionsWithLog(order: string[], form: FormData, projectId: number): Promise<BuildSectionsResult> {
+ *  항목들 기준으로 다시 매긴다(건너뛴 항목 때문에 번호가 비지 않도록) — titlePrefixOffset을
+ *  주면 그 수만큼 밀려서 매겨진다("정렬 기준: 인력별"에서 인력별로 묶인 항목들 뒤에 이어
+ *  붙는 "하나만" 항목들의 번호가 1부터 다시 시작하지 않도록 buildSectionsByPersonnel이 씀). */
+async function buildSectionsWithLog(order: string[], form: FormData, projectId: number, titlePrefixOffset = 0): Promise<BuildSectionsResult> {
   const sectionZips: JSZip[] = []
   const succeededLabels: string[] = []
   const log: GenerationLogEntry[] = []
@@ -237,7 +265,11 @@ async function buildSectionsWithLog(order: string[], form: FormData, projectId: 
     }
     try {
       const buf = Buffer.from(await file.arrayBuffer())
-      const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${succeededLabels.length + 1}. `)
+      const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${titlePrefixOffset + succeededLabels.length + 1}. `)
+      if (!zip) {
+        log.push({ id, label, ok: false, error: '해당하는 인력이 없습니다' })
+        continue
+      }
       sectionZips.push(zip)
       succeededLabels.push(label)
       log.push({ id, label, ok: true })
@@ -247,6 +279,111 @@ async function buildSectionsWithLog(order: string[], form: FormData, projectId: 
       log.push({ id, label, ok: false, error: msg })
     }
   }
+  return { sectionZips, succeededLabels, log }
+}
+
+/**
+ * "정렬 기준: 인력별"(2026-09-10 사용자 확인 — "인력만큼이라고 지정된 애들만 그거 다
+ * 끝나면 하나짜리 서류들 나열") 모드 전용 조립. repeatMode가 'all'인 항목들만 사람
+ * 단위로 묶고("이 사업에 투입된 인력" 전원을 기준 순서로), 그 뒤에 repeatMode가 'one'인
+ * 항목들을 지금까지처럼 항목당 한 번씩 나열한다.
+ *
+ * 항목마다 "사람 단위 개념이 있는지"가 다르다:
+ *   - personnelScoped 항목(경력/동의서/재직증명서/경력증명서)은 사람마다 실제로 다시
+ *     생성한다(build를 그 사람 이름으로 필터링해서 호출) — 이 사람이 그 서류 대상이
+ *     아니면(예: 동의서는 비상근만) build가 null을 반환하고, 그러면 조용히 건너뛴다
+ *     (2026-09-10 사용자 확인 — "해당되는 서류만 넘기고 나머지는 건너뛴다").
+ *   - 그 외(회사서류/표 형태 등, 애초에 사람과 무관한 문서)는 한 번만 생성해서, 그 결과를
+ *     모든 사람 아래에 그대로 재사용한다(같은 내용을 사람 수만큼 다시 만드는 대신 —
+ *     mergeDecksSharingMaster는 같은 zip을 여러 번 합쳐도 안전하다, pptx-merge.ts 참고).
+ */
+async function buildSectionsByPersonnel(
+  order: string[],
+  form: FormData,
+  projectId: number,
+  repeatMode: Record<string, string>
+): Promise<BuildSectionsResult> {
+  const groupIds = order.filter(id => repeatMode[id] === 'all')
+  const singleIds = order.filter(id => repeatMode[id] !== 'all')
+  const sectionZips: JSZip[] = []
+  const succeededLabels: string[] = []
+  const log: GenerationLogEntry[] = []
+
+  if (groupIds.length) {
+    const roster = await query<{ person_name: string }>(
+      `SELECT person_name FROM proposal_members WHERE project_id = $1 ORDER BY id ASC`,
+      [projectId]
+    )
+    const rosterNames = roster.map(r => r.person_name)
+
+    if (!rosterNames.length) {
+      for (const id of groupIds) log.push({ id, label: ATTACHMENT_TYPES[id].label, ok: false, error: '이 사업에 투입된 인력이 없습니다' })
+    } else {
+      // 항목별로 "사람 이름 → zip"(personnelScoped) 또는 zip 하나(그 외, 전원 공용)를 먼저
+      // 만들어둔다 — personnelScoped가 아닌 항목을 사람 수만큼 반복 생성하는 낭비를 피한다.
+      const perIdSource = new Map<string, Map<string, JSZip> | JSZip | null>()
+      for (const id of groupIds) {
+        const def = ATTACHMENT_TYPES[id]
+        const file = form.get(id) as File | null
+        if (!file || file.size === 0) {
+          perIdSource.set(id, null)
+          log.push({ id, label: def.label, ok: false, error: '템플릿(.pptx) 파일이 없습니다' })
+          continue
+        }
+        const buf = Buffer.from(await file.arrayBuffer())
+        if (!def.personnelScoped) {
+          try {
+            const zip = await def.build(buf, projectId, form, '')
+            perIdSource.set(id, zip)
+            log.push({ id, label: def.label, ok: !!zip, error: zip ? undefined : '생성할 수 없습니다' })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            console.error(`[ppt-attachment-bundle] "${def.label}" 생성 실패:`, e)
+            perIdSource.set(id, null)
+            log.push({ id, label: def.label, ok: false, error: msg })
+          }
+          continue
+        }
+        const byPerson = new Map<string, JSZip>()
+        let lastError: string | undefined
+        for (const personName of rosterNames) {
+          try {
+            const zip = await def.build(buf, projectId, form, '', [personName])
+            if (zip) byPerson.set(personName, zip)
+          } catch (e) {
+            lastError = e instanceof Error ? e.message : String(e)
+            console.error(`[ppt-attachment-bundle] "${def.label}" (${personName}) 생성 실패:`, e)
+          }
+        }
+        perIdSource.set(id, byPerson)
+        log.push({
+          id,
+          label: def.label,
+          ok: byPerson.size > 0,
+          error: byPerson.size > 0 ? undefined : (lastError || '해당하는 인력이 없습니다'),
+        })
+      }
+
+      // 사람 순서(rosterNames) 기준으로, 각 사람 아래에 선택된 순서(groupIds) 그대로 붙인다.
+      for (const personName of rosterNames) {
+        for (const id of groupIds) {
+          const source = perIdSource.get(id)
+          const zip = source instanceof Map ? source.get(personName) : source
+          if (zip) {
+            sectionZips.push(zip)
+            if (!succeededLabels.includes(ATTACHMENT_TYPES[id].label)) succeededLabels.push(ATTACHMENT_TYPES[id].label)
+          }
+        }
+      }
+    }
+  }
+
+  // "하나만" 항목들은 지금까지처럼(서류별 모드와 동일) 항목당 한 번씩, 인력별 묶음 뒤에 이어 나열한다.
+  const singleResult = await buildSectionsWithLog(singleIds, form, projectId, succeededLabels.length)
+  sectionZips.push(...singleResult.sectionZips)
+  succeededLabels.push(...singleResult.succeededLabels)
+  log.push(...singleResult.log)
+
   return { sectionZips, succeededLabels, log }
 }
 
@@ -282,9 +419,27 @@ app.post('/:projectId', async (c) => {
       if (!ATTACHMENT_TYPES[id]) return c.json({ ok: false, error: `알 수 없는 첨부 항목: ${id}` }, 400)
     }
 
+    // ── 정렬 기준: 서류별(기본, 지금까지 동작)/인력별 ─────────────────────
+    // "인력별"이면 repeatMode가 'all'인 항목들을 사람 단위로 묶는다 — 자세한 건
+    // buildSectionsByPersonnel 참고(2026-09-10 사용자 확인).
+    const sortBasis = form.get('sortBasis') === 'personnel' ? 'personnel' : 'document'
+    let repeatMode: Record<string, string> = {}
+    const repeatModeRaw = form.get('repeatMode')
+    if (typeof repeatModeRaw === 'string' && repeatModeRaw.trim()) {
+      try {
+        const parsed = JSON.parse(repeatModeRaw)
+        if (parsed && typeof parsed === 'object') repeatMode = parsed
+      } catch {
+        // 무시 — 파싱 실패 시 전부 '하나만' 취급(서류별과 동일하게 동작)
+      }
+    }
+
     // ── 선택된 항목들을 순서대로 생성 (실패한 항목은 건너뛰고 계속 진행 — 자세한 건
-    // buildSectionsWithLog 참고) ──────────────────────────────────────────
-    const { sectionZips, succeededLabels, log } = await buildSectionsWithLog(order, form, projectId)
+    // buildSectionsWithLog/buildSectionsByPersonnel 참고) ──────────────────
+    const { sectionZips, succeededLabels, log } =
+      sortBasis === 'personnel'
+        ? await buildSectionsByPersonnel(order, form, projectId, repeatMode)
+        : await buildSectionsWithLog(order, form, projectId)
 
     if (sectionZips.length === 0) {
       return c.json({ ok: false, error: '생성된 첨부가 없습니다 — 아래 로그를 확인해주세요', log }, 500)

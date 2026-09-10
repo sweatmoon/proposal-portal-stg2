@@ -29,9 +29,10 @@ export interface EmploymentCertificateZipResult {
 export async function buildEmploymentCertificateZip(
   templateBuf: Buffer,
   projectId: number,
-  titlePrefix = ''
-): Promise<EmploymentCertificateZipResult> {
-  return buildEmployeeCertificateZip(templateBuf, projectId, PAGE_TITLE, titlePrefix)
+  titlePrefix = '',
+  personnelNameFilter?: string[]
+): Promise<EmploymentCertificateZipResult | null> {
+  return buildEmployeeCertificateZip(templateBuf, projectId, PAGE_TITLE, titlePrefix, personnelNameFilter)
 }
 
 app.post('/:projectId', async (c) => {
@@ -50,7 +51,9 @@ app.post('/:projectId', async (c) => {
     }
 
     const templateBuf = Buffer.from(await file.arrayBuffer())
-    const { zip, personCount, skipped, projectName } = await buildEmploymentCertificateZip(templateBuf, projectId)
+    const result = await buildEmploymentCertificateZip(templateBuf, projectId)
+    if (!result) throw new Error('이 사업에 투입된 인력이 없습니다')
+    const { zip, personCount, skipped, projectName } = result
 
     const outBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } })
     const safeName = projectName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)
