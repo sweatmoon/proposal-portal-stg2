@@ -2455,21 +2455,19 @@ app.get('/ppt-generate', (c) => {
       var items = ITEM_CATALOG.filter(function(it) { return it.group === g.key })
       var itemsHtml = items.map(function(it) {
         var checked = !!bundleItemChecked[it.id]
-        var menu = findMenuByCode(it.templateMenuCode)
-        var hasTemplate = menu && menu.templates && menu.templates.length > 0 && !!menu.templates[0].pptx_b64_key
         // 인력만큼 반복 / 하나만 — 의미가 모호해 보이는 항목(회사서류/표 형태)도 인력별로
         // 붙여야 하는 사업이 있을 수 있어 전 항목에 다 넣는다(2026-09-10 사용자 확인 —
-        // "의미 없어보여도 전부 다 넣어"). 항목별 원래 성격에 맞는 기본값을 따로 두고
-        // (인력 반복이 자연스러운 4종만 "인력만큼", 나머지는 "하나만"), 기본값과 다르면
-        // 색을 다르게 해서 눈에 띄게 한다. 아직 실제 생성 로직에는 연결 안 된 상태 표시용 UI.
+        // "의미 없어보여도 전부 다 넣어"). 항목별 원래 성격에 맞는 기본값을 따로 두되
+        // (인력 반복이 자연스러운 4종만 "인력만큼", 나머지는 "하나만"), 색은 기본값
+        // 여부가 아니라 "값 자체"로 고정 구분한다 — 인력만큼=청록, 하나만=주황
+        // (체크된 행의 보라색과 헷갈리지 않도록; 2026-09-10 사용자 확인 — "하나만/
+        // 인력만큼 색깔 다르게 하라고 했지", "보라색은 체크된거랑 너무 비슷하잖아").
+        // 템플릿 등록 여부를 보여주던 초록 체크 아이콘은 뺐다(2026-09-10 — "초록색 체크
+        // 표시 없애"). 아직 실제 생성 로직에는 연결 안 된 상태 표시용 UI.
         var defaultMode = it.perPerson ? 'all' : 'one'
         var mode = bundleRepeatMode[it.id] || defaultMode
-        var isNonDefault = mode !== defaultMode
-        var templateIcon = hasTemplate
-          ? '<i class="fas fa-check-circle text-emerald-500"></i>'
-          : '<i class="fas fa-exclamation-circle text-amber-400"></i>'
         var repeatSelect = '<select class="text-[10px] font-semibold rounded-md pl-1.5 pr-4 py-1 border cursor-pointer flex-shrink-0 '
-          + (isNonDefault ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-500')
+          + (mode === 'all' ? 'border-teal-400 bg-teal-50 text-teal-700' : 'border-orange-400 bg-orange-50 text-orange-700')
           + '" onclick="event.stopPropagation()" onchange="onRepeatModeChange(&#39;' + it.id + '&#39;, this.value)">'
           + '<option value="all"' + (mode === 'all' ? ' selected' : '') + '>인력만큼</option>'
           + '<option value="one"' + (mode === 'one' ? ' selected' : '') + '>하나만</option>'
@@ -2479,7 +2477,6 @@ app.get('/ppt-generate', (c) => {
           + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
           + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(&#39;' + it.id + '&#39;, this.checked)">'
           + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(it.label) + '</span>'
-          + templateIcon
           + repeatSelect
           + '</label>'
       }).join('')
