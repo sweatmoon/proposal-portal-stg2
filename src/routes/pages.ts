@@ -2449,59 +2449,77 @@ app.get('/ppt-generate', (c) => {
     { key: 'proposal', label: '제안' },
   ]
 
+  /** "인력만큼/하나만" 반복모드 드롭박스 한 개를 그린다. 인력만큼=청록, 하나만=주황으로
+   *  "값 자체"를 고정 구분한다 — 항목별 기본값과 다른지 여부로 색을 바꾸면 체크된 행의
+   *  보라색과 헷갈린다는 피드백 반영(2026-09-10 사용자 확인 — "하나만/인력만큼 색깔
+   *  다르게 하라고 했지", "보라색은 체크된거랑 너무 비슷하잖아"). 의미가 모호해 보이는
+   *  항목(회사서류 등)도 인력별로 붙여야 하는 사업이 있을 수 있어 ITEM_CATALOG 전 항목에
+   *  다 넣는다(2026-09-10 — "의미 없어보여도 전부 다 넣어"). 아직 실제 생성 로직에는
+   *  연결 안 된 상태 표시용 UI. */
+  function renderRepeatModeSelect(itemId, mode) {
+    return '<select class="text-[10px] font-semibold rounded-md pl-1.5 pr-4 py-1 border cursor-pointer flex-shrink-0 '
+      + (mode === 'all' ? 'border-teal-400 bg-teal-50 text-teal-700' : 'border-orange-400 bg-orange-50 text-orange-700')
+      + '" onclick="event.stopPropagation()" onchange="onRepeatModeChange(&#39;' + itemId + '&#39;, this.value)">'
+      + '<option value="all"' + (mode === 'all' ? ' selected' : '') + '>인력만큼</option>'
+      + '<option value="one"' + (mode === 'one' ? ' selected' : '') + '>하나만</option>'
+      + '</select>'
+  }
+
+  /** ITEM_CATALOG 항목 하나를 체크박스 + 라벨 + 반복모드 드롭박스 한 줄(label)로 그린다.
+   *  템플릿 등록 여부를 보여주던 초록 체크 아이콘은 뺐다(2026-09-10 — "초록색 체크 표시
+   *  없애") — 지금은 체크박스와 반복모드 드롭박스만 남는다. */
+  function renderCatalogItemRow(it) {
+    var checked = !!bundleItemChecked[it.id]
+    var defaultMode = it.perPerson ? 'all' : 'one'
+    var mode = bundleRepeatMode[it.id] || defaultMode
+    return '<label class="flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition text-xs '
+      + (checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:bg-slate-50') + '">'
+      + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
+      + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(&#39;' + it.id + '&#39;, this.checked)">'
+      + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(it.label) + '</span>'
+      + renderRepeatModeSelect(it.id, mode)
+      + '</label>'
+  }
+
+  /** ① 첨부 항목 선택 목록 전체를 그린다 — BUNDLE_GROUP_DEFS(필수3개/회사/제안) 순서로
+   *  3열을 만들고, 각 열 안에 ITEM_CATALOG에서 그 그룹에 속한 항목들을 세로로 나열한다. */
   function renderBundleItemList() {
     var listEl = document.getElementById('bundleItemList')
     listEl.innerHTML = BUNDLE_GROUP_DEFS.map(function(g) {
       var items = ITEM_CATALOG.filter(function(it) { return it.group === g.key })
-      var itemsHtml = items.map(function(it) {
-        var checked = !!bundleItemChecked[it.id]
-        // 인력만큼 반복 / 하나만 — 의미가 모호해 보이는 항목(회사서류/표 형태)도 인력별로
-        // 붙여야 하는 사업이 있을 수 있어 전 항목에 다 넣는다(2026-09-10 사용자 확인 —
-        // "의미 없어보여도 전부 다 넣어"). 항목별 원래 성격에 맞는 기본값을 따로 두되
-        // (인력 반복이 자연스러운 4종만 "인력만큼", 나머지는 "하나만"), 색은 기본값
-        // 여부가 아니라 "값 자체"로 고정 구분한다 — 인력만큼=청록, 하나만=주황
-        // (체크된 행의 보라색과 헷갈리지 않도록; 2026-09-10 사용자 확인 — "하나만/
-        // 인력만큼 색깔 다르게 하라고 했지", "보라색은 체크된거랑 너무 비슷하잖아").
-        // 템플릿 등록 여부를 보여주던 초록 체크 아이콘은 뺐다(2026-09-10 — "초록색 체크
-        // 표시 없애"). 아직 실제 생성 로직에는 연결 안 된 상태 표시용 UI.
-        var defaultMode = it.perPerson ? 'all' : 'one'
-        var mode = bundleRepeatMode[it.id] || defaultMode
-        var repeatSelect = '<select class="text-[10px] font-semibold rounded-md pl-1.5 pr-4 py-1 border cursor-pointer flex-shrink-0 '
-          + (mode === 'all' ? 'border-teal-400 bg-teal-50 text-teal-700' : 'border-orange-400 bg-orange-50 text-orange-700')
-          + '" onclick="event.stopPropagation()" onchange="onRepeatModeChange(&#39;' + it.id + '&#39;, this.value)">'
-          + '<option value="all"' + (mode === 'all' ? ' selected' : '') + '>인력만큼</option>'
-          + '<option value="one"' + (mode === 'one' ? ' selected' : '') + '>하나만</option>'
-          + '</select>'
-        return '<label class="flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition text-xs '
-          + (checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:bg-slate-50') + '">'
-          + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
-          + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(&#39;' + it.id + '&#39;, this.checked)">'
-          + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(it.label) + '</span>'
-          + repeatSelect
-          + '</label>'
-      }).join('')
+      var itemsHtml = items.map(renderCatalogItemRow).join('')
       return '<div class="flex-1 min-w-0"><div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">' + g.label + '</div>'
         + '<div class="space-y-1.5">' + itemsHtml + '</div></div>'
     }).join('')
   }
 
-  function onBundleItemChange(id, checked) {
-    bundleItemChecked[id] = checked
-    renderBundleItemList()
-
+  /** 사업자등록증/납세증명서/법인등기부등본/4대보험 중 하나라도 선택돼 있으면 도장 선택
+   *  UI를 보여준다 — 이 항목들은 전부 같은 템플릿 슬롯("범용 템플릿(도장O)")을 공유해서
+   *  도장도 한 번만 고르면 된다. 전부 해제되면 선택값도 같이 지운다. */
+  function updateStampSectionVisibility() {
     var stampNeeded = ITEM_CATALOG.some(function(it) { return it.stamp && bundleItemChecked[it.id] })
     document.getElementById('bundleStampWrap').classList.toggle('hidden', !stampNeeded)
     if (!stampNeeded) {
       bundleStampType = null
       document.querySelectorAll('input[name="bundleStamp"]').forEach(function(el) { el.checked = false })
     }
+  }
 
+  /** 법인등기부등본이 선택돼 있을 때만 말소사항 포함 여부 UI를 보여준다. */
+  function updateCorpRegistrySectionVisibility() {
     var corpNeeded = !!bundleItemChecked['corpregistry']
     document.getElementById('bundleCorpRegistryWrap').classList.toggle('hidden', !corpNeeded)
     if (!corpNeeded) {
       bundleCorpRegistryIncludeCancelled = null
       document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
     }
+  }
+
+  function onBundleItemChange(id, checked) {
+    bundleItemChecked[id] = checked
+    renderBundleItemList()
+    updateStampSectionVisibility()
+    updateCorpRegistrySectionVisibility()
   }
 
   function onStampChange(value) {
@@ -2575,7 +2593,31 @@ app.get('/ppt-generate', (c) => {
     })
   }
 
-  // ── menu_code → ATTACHMENT_TYPES 키 매핑 ─────────────────────
+  /** 첨부PPT 생성 API(POST /api/ppt-attachment-bundle/:id) 응답을 처리한다 — 사업 기반
+   *  (confirmGenerateBundle)/자유 생성(confirmFreeBundle) 두 흐름이 응답 처리 로직은
+   *  완전히 같아서(실패 시 로그만 찍고 종료, 성공 시 pptx 다운로드 + 항목별 결과 로그)
+   *  공용 함수로 뺐다. defaultFilename은 서버가 Content-Disposition을 안 줬을 때만 쓴다. */
+  async function handleBundleApiResponse(r, sourceLabel, defaultFilename) {
+    if (!r.ok) {
+      var ej = await r.json().catch(function() { return {} })
+      renderBundleLogResult(sourceLabel, ej.log || [], ej.error || ('생성 실패 (' + r.status + ')'))
+      return
+    }
+    var logHeader = r.headers.get('X-Generation-Log')
+    var log = []
+    if (logHeader) { try { log = JSON.parse(decodeURIComponent(logHeader)) } catch(e2) {} }
+    var blob = await r.blob()
+    var cd = r.headers.get('Content-Disposition') || ''
+    var m2 = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';]+)/i)
+    var filename = m2 ? decodeURIComponent(m2[1]) : defaultFilename
+    var url = URL.createObjectURL(blob)
+    var a = document.createElement('a'); a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+    renderBundleLogResult(sourceLabel, log, null)
+  }
+
+  // ── PPTX MIME + base64→File 변환 유틸 ─────────────────────────
   var PPTX_MIME   = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
   function b64ToFile(b64, name) {
@@ -2662,23 +2704,7 @@ app.get('/ppt-generate', (c) => {
       })
 
       var r = await fetch('/api/ppt-attachment-bundle/' + bundleProjectId, { method: 'POST', body: fd })
-      if (!r.ok) {
-        var ej = await r.json().catch(function() { return {} })
-        renderBundleLogResult('사업 기반', ej.log || [], ej.error || ('생성 실패 (' + r.status + ')'))
-        return
-      }
-      var logHeader = r.headers.get('X-Generation-Log')
-      var log = []
-      if (logHeader) { try { log = JSON.parse(decodeURIComponent(logHeader)) } catch(e2) {} }
-      var blob = await r.blob()
-      var cd = r.headers.get('Content-Disposition') || ''
-      var m2 = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';]+)/i)
-      var filename = m2 ? decodeURIComponent(m2[1]) : ('첨부PPT_' + bundleProjectId + '.pptx')
-      var url = URL.createObjectURL(blob)
-      var a = document.createElement('a'); a.href = url; a.download = filename
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-      renderBundleLogResult('사업 기반', log, null)
+      await handleBundleApiResponse(r, '사업 기반', '첨부PPT_' + bundleProjectId + '.pptx')
     } catch(e) {
       addBundleLog('err', '사업 기반 첨부PPT 생성 실패: ' + e.message)
     } finally {
@@ -2887,23 +2913,7 @@ app.get('/ppt-generate', (c) => {
 
       // 자유생성은 projectId=0 (서버에서 별도 처리 또는 무시)
       var r = await fetch('/api/ppt-attachment-bundle/0', { method: 'POST', body: fd })
-      if (!r.ok) {
-        var ej = await r.json().catch(function(){return{}})
-        renderBundleLogResult('자유 생성', ej.log || [], ej.error || ('생성 실패 (' + r.status + ')'))
-        return
-      }
-      var logHeader = r.headers.get('X-Generation-Log')
-      var log = []
-      if (logHeader) { try { log = JSON.parse(decodeURIComponent(logHeader)) } catch(e2) {} }
-      var blob = await r.blob()
-      var cd = r.headers.get('Content-Disposition') || ''
-      var m2 = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';]+)/i)
-      var filename = m2 ? decodeURIComponent(m2[1]) : '자유첨부PPT.pptx'
-      var url = URL.createObjectURL(blob)
-      var a = document.createElement('a'); a.href = url; a.download = filename
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-      renderBundleLogResult('자유 생성', log, null)
+      await handleBundleApiResponse(r, '자유 생성', '자유첨부PPT.pptx')
     } catch(e) {
       addBundleLog('err', '자유 생성 첨부PPT 생성 실패: ' + e.message)
     } finally {

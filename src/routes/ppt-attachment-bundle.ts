@@ -205,6 +205,51 @@ const ATTACHMENT_TYPES: Record<
   },
 }
 
+interface GenerationLogEntry {
+  id: string
+  label: string
+  ok: boolean
+  error?: string
+}
+
+interface BuildSectionsResult {
+  sectionZips: JSZip[]
+  /** 실제로 생성에 성공한 항목들의 라벨 — 표지 목차 번호를 이 순서로 다시 매긴다. */
+  succeededLabels: string[]
+  log: GenerationLogEntry[]
+}
+
+/** order에 담긴 항목들을 순서대로 하나씩 생성한다. 항목 하나가 실패해도(NAS 연결 실패,
+ *  템플릿 누락 등) 전체를 막지 않고 그 항목만 건너뛰고 계속 진행한다 — 결과 로그로 어떤
+ *  항목이 왜 빠졌는지 보여주기 위함(2026-09-09 사용자 확인 — "제대로 생성됐는지 어떤
+ *  부분이 왜 생성이 안됐는지 그런거 보여주기"). 제목 앞 번호(`${n}. `)는 실제로 성공한
+ *  항목들 기준으로 다시 매긴다(건너뛴 항목 때문에 번호가 비지 않도록). */
+async function buildSectionsWithLog(order: string[], form: FormData, projectId: number): Promise<BuildSectionsResult> {
+  const sectionZips: JSZip[] = []
+  const succeededLabels: string[] = []
+  const log: GenerationLogEntry[] = []
+  for (const id of order) {
+    const label = ATTACHMENT_TYPES[id].label
+    const file = form.get(id) as File | null
+    if (!file || file.size === 0) {
+      log.push({ id, label, ok: false, error: '템플릿(.pptx) 파일이 없습니다' })
+      continue
+    }
+    try {
+      const buf = Buffer.from(await file.arrayBuffer())
+      const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${succeededLabels.length + 1}. `)
+      sectionZips.push(zip)
+      succeededLabels.push(label)
+      log.push({ id, label, ok: true })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[ppt-attachment-bundle] "${label}" 생성 실패:`, e)
+      log.push({ id, label, ok: false, error: msg })
+    }
+  }
+  return { sectionZips, succeededLabels, log }
+}
+
 app.post('/:projectId', async (c) => {
   try {
     const projectId = Number(c.req.param('projectId'))
@@ -237,39 +282,9 @@ app.post('/:projectId', async (c) => {
       if (!ATTACHMENT_TYPES[id]) return c.json({ ok: false, error: `알 수 없는 첨부 항목: ${id}` }, 400)
     }
 
-    // ── 선택된 항목들을 순서대로 생성. 항목 하나가 실패해도(NAS 연결 실패, 템플릿
-    // 누락 등) 전체를 막지 않고 그 항목만 건너뛰고 계속 진행한다 — 결과 로그로
-    // 어떤 항목이 왜 빠졌는지 보여주기 위함(2026-09-09 사용자 확인 — "제대로
-    // 생성됐는지 어떤 부분이 왜 생성이 안됐는지 그런거 보여주기"). 제목 앞 번호는
-    // 실제로 성공한 항목들 기준으로 다시 매긴다(건너뛴 항목 때문에 번호가 비지 않도록).
-    interface GenerationLogEntry {
-      id: string
-      label: string
-      ok: boolean
-      error?: string
-    }
-    const sectionZips: JSZip[] = []
-    const succeededLabels: string[] = []
-    const log: GenerationLogEntry[] = []
-    for (const id of order) {
-      const label = ATTACHMENT_TYPES[id].label
-      const file = form.get(id) as File | null
-      if (!file || file.size === 0) {
-        log.push({ id, label, ok: false, error: '템플릿(.pptx) 파일이 없습니다' })
-        continue
-      }
-      try {
-        const buf = Buffer.from(await file.arrayBuffer())
-        const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${succeededLabels.length + 1}. `)
-        sectionZips.push(zip)
-        succeededLabels.push(label)
-        log.push({ id, label, ok: true })
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        console.error(`[ppt-attachment-bundle] "${label}" 생성 실패:`, e)
-        log.push({ id, label, ok: false, error: msg })
-      }
-    }
+    // ── 선택된 항목들을 순서대로 생성 (실패한 항목은 건너뛰고 계속 진행 — 자세한 건
+    // buildSectionsWithLog 참고) ──────────────────────────────────────────
+    const { sectionZips, succeededLabels, log } = await buildSectionsWithLog(order, form, projectId)
 
     if (sectionZips.length === 0) {
       return c.json({ ok: false, error: '생성된 첨부가 없습니다 — 아래 로그를 확인해주세요', log }, 500)
