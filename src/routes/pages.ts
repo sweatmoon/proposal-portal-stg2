@@ -2047,12 +2047,43 @@ app.get('/ppt-generate', (c) => {
       <!-- 2-column body -->
       <div class="flex-1 overflow-hidden flex min-h-0">
 
-        <!-- ① 첨부 항목 선택 (full width) -->
+        <!-- ① 첨부 항목 선택 (필수 3개 / 회사 / 제안 그룹으로 분류, 2026-09-10 사용자 확인) -->
         <div class="flex-1 flex flex-col overflow-hidden">
           <div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex-shrink-0">
             <div class="text-xs font-bold text-slate-500 uppercase tracking-wide">① 첨부 항목 선택</div>
           </div>
-          <div id="bundleItemList" class="flex-1 overflow-y-auto p-4 space-y-1.5"></div>
+          <div id="bundleItemList" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
+
+          <!-- 사업자등록증/납세증명서/법인등기부등본/4대보험 중 하나라도 선택 시 나타나는 도장 선택 —
+               이 항목들은 전부 "범용 템플릿(도장O)" 슬롯 하나를 공유하므로 도장도 한 번만 고른다. -->
+          <div id="bundleStampWrap" class="hidden px-4 py-3 bg-amber-50 border-t border-amber-100 flex-shrink-0">
+            <div class="text-xs font-bold text-amber-700 mb-2">찍을 도장 선택</div>
+            <div class="flex gap-4 text-sm text-slate-700">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleStamp" value="원본대조필" class="accent-amber-600" onchange="onStampChange(this.value)">
+                원본대조필
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleStamp" value="사실과상위없음" class="accent-amber-600" onchange="onStampChange(this.value)">
+                사실과상위없음
+              </label>
+            </div>
+          </div>
+
+          <!-- 법인등기부등본 선택 시에만 나타나는 말소사항 포함 여부 -->
+          <div id="bundleCorpRegistryWrap" class="hidden px-4 py-3 bg-sky-50 border-t border-sky-100 flex-shrink-0">
+            <div class="text-xs font-bold text-sky-700 mb-2">법인등기부등본 말소사항 포함 여부</div>
+            <div class="flex gap-4 text-sm text-slate-700">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleCorpRegistryCancelled" value="true" class="accent-sky-600" onchange="onCorpRegistryCancelledChange(this.value)">
+                말소사항포함
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="bundleCorpRegistryCancelled" value="false" class="accent-sky-600" onchange="onCorpRegistryCancelledChange(this.value)">
+                말소사항미포함
+              </label>
+            </div>
+          </div>
         </div>
 
       </div>
@@ -2164,7 +2195,34 @@ app.get('/ppt-generate', (c) => {
   // ── 모달 상태 ──────────────────────────────────────────────────
   var bundleProjectId = null
   var bundleMenus     = []
-  var bundleItemChecked = {}
+  var bundleItemChecked = {}          // { catalogId: true/false } — ITEM_CATALOG의 id 기준
+  var bundleStampType = null          // '원본대조필' | '사실과상위없음' | null
+  var bundleCorpRegistryIncludeCancelled = null  // 'true' | 'false' | null
+
+  // 실제 첨부 문서 종류 카탈로그 — DB(ppt_menus)에는 표지/일정표/실적경력/동의서/재직증명서/
+  // 경력증명서/상근인력현황과, 이들이 공유하는 "범용 템플릿(도장X/도장O)" 슬롯만 있고,
+  // 사업자등록증/납세증명서/법인등기부등본/4대보험/표준재무제표는 각자 별도 템플릿을
+  // 올릴 필요 없이 그 공유 슬롯(templateMenuCode)을 그대로 쓴다(2026-09-03 원래 설계 —
+  // "전부 범용 템플릿 쓸 거임"). group으로 "필수 3개/회사/제안" 분류(2026-09-10 사용자 확인).
+  var ITEM_CATALOG = [
+    { id: 'schedule',      label: '감리원 일정 현황표',        typeKey: 'schedule',      templateMenuCode: 'ATT_SCHEDULE',    group: 'core' },
+    { id: 'career',        label: '투입 감리원별 실적 및 경력', typeKey: 'career',        templateMenuCode: 'ATT_CAREER',      group: 'core' },
+    { id: 'consent',       label: '비상근 감리원 참여 동의서',  typeKey: 'consent',       templateMenuCode: 'ATT_CONSENT',     group: 'core' },
+    { id: 'financial',     label: '표준재무제표',              typeKey: 'financial',     templateMenuCode: 'ATT_STAMP_NO',    group: 'company' },
+    { id: 'bizreg',        label: '사업자등록증',              typeKey: 'bizreg',        templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
+    { id: 'taxcert',       label: '국세 납세증명서',            typeKey: 'taxcert',       templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
+    { id: 'localtaxcert',  label: '지방세 납세증명서',          typeKey: 'localtaxcert',  templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
+    { id: 'corpregistry',  label: '법인등기부등본',             typeKey: 'corpregistry',  templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true, corpRegistry: true },
+    { id: 'insurance',     label: '4대보험 가입확인서',         typeKey: 'insurance',     templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
+    { id: 'employmentCert', label: '재직증명서',                typeKey: 'employmentCert', templateMenuCode: 'ATT_EMPLOYMENT',  group: 'proposal' },
+    { id: 'careerCert',     label: '경력증명서',                 typeKey: 'careerCert',     templateMenuCode: 'ATT_CAREER_CERT', group: 'proposal' },
+    { id: 'staffingStatus', label: '상근감리원인력현황',         typeKey: 'staffingStatus', templateMenuCode: 'ATT_STAFFING',    group: 'proposal' },
+  ]
+  var CORE_IDS = ['schedule', 'career', 'consent']
+
+  function findMenuByCode(code) {
+    return bundleMenus.find(function(m) { return m.menu_code === code })
+  }
 
   // ── 인력 관련 상태 ────────────────────────────────────────────
   var allPersonnel = []          // 전체 인력 목록 캐시
@@ -2320,11 +2378,18 @@ app.get('/ppt-generate', (c) => {
   async function openBundleModal(id, projectName) {
     bundleProjectId = id
     bundleItemChecked = {}
+    CORE_IDS.forEach(function(cid) { bundleItemChecked[cid] = true })
     bundleMenus = []
+    bundleStampType = null
+    bundleCorpRegistryIncludeCancelled = null
     personnelChecked = {}
     personnelKwMap = {}
     document.getElementById('bundleModalProjectName').textContent = projectName
     document.getElementById('bundleModal').classList.remove('hidden')
+    document.getElementById('bundleStampWrap').classList.add('hidden')
+    document.querySelectorAll('input[name="bundleStamp"]').forEach(function(el) { el.checked = false })
+    document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
+    document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
     // 키워드 행 초기화 — "② 인력 선택/③ 키워드 변환" UI는 아직 이 모달에 마크업이 없고
     // 백엔드도 keywords/personnelKeywords/personnelIds를 안 읽는 미완성 기능이라, 그
     // 요소들이 없어서 여기서 죽지 않게 존재할 때만 건드린다(2026-09-10 — 이 3줄 때문에
@@ -2354,26 +2419,60 @@ app.get('/ppt-generate', (c) => {
     }
   }
 
+  var BUNDLE_GROUP_DEFS = [
+    { key: 'core',     label: '필수 3개' },
+    { key: 'company',  label: '회사' },
+    { key: 'proposal', label: '제안' },
+  ]
+
   function renderBundleItemList() {
     var listEl = document.getElementById('bundleItemList')
-    listEl.innerHTML = bundleMenus.map(function(m) {
-      var checked = !!bundleItemChecked[m.id]
-      var hasTemplate = m.templates && m.templates.length > 0 && !!m.templates[0].pptx_b64_key
-      return '<label class="flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition text-xs '
-        + (checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:bg-slate-50') + '">'
-        + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
-        + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(' + m.id + ', this.checked)">'
-        + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(m.menu_name) + '</span>'
-        + (hasTemplate
-          ? '<i class="fas fa-check-circle text-emerald-500"></i>'
-          : '<i class="fas fa-exclamation-circle text-amber-400"></i>')
-        + '</label>'
+    listEl.innerHTML = BUNDLE_GROUP_DEFS.map(function(g) {
+      var items = ITEM_CATALOG.filter(function(it) { return it.group === g.key })
+      var itemsHtml = items.map(function(it) {
+        var checked = !!bundleItemChecked[it.id]
+        var menu = findMenuByCode(it.templateMenuCode)
+        var hasTemplate = menu && menu.templates && menu.templates.length > 0 && !!menu.templates[0].pptx_b64_key
+        return '<label class="flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition text-xs '
+          + (checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:bg-slate-50') + '">'
+          + '<input type="checkbox" class="w-3.5 h-3.5 accent-violet-600 flex-shrink-0" '
+          + (checked ? 'checked' : '') + ' onchange="onBundleItemChange(&#39;' + it.id + '&#39;, this.checked)">'
+          + '<span class="flex-1 font-medium text-slate-700">' + escapeHtml(it.label) + '</span>'
+          + (hasTemplate
+            ? '<i class="fas fa-check-circle text-emerald-500"></i>'
+            : '<i class="fas fa-exclamation-circle text-amber-400"></i>')
+          + '</label>'
+      }).join('')
+      return '<div><div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">' + g.label + '</div>'
+        + '<div class="space-y-1.5">' + itemsHtml + '</div></div>'
     }).join('')
   }
 
-  function onBundleItemChange(menuId, checked) {
-    bundleItemChecked[menuId] = checked
+  function onBundleItemChange(id, checked) {
+    bundleItemChecked[id] = checked
     renderBundleItemList()
+
+    var stampNeeded = ITEM_CATALOG.some(function(it) { return it.stamp && bundleItemChecked[it.id] })
+    document.getElementById('bundleStampWrap').classList.toggle('hidden', !stampNeeded)
+    if (!stampNeeded) {
+      bundleStampType = null
+      document.querySelectorAll('input[name="bundleStamp"]').forEach(function(el) { el.checked = false })
+    }
+
+    var corpNeeded = !!bundleItemChecked['corpregistry']
+    document.getElementById('bundleCorpRegistryWrap').classList.toggle('hidden', !corpNeeded)
+    if (!corpNeeded) {
+      bundleCorpRegistryIncludeCancelled = null
+      document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
+    }
+  }
+
+  function onStampChange(value) {
+    bundleStampType = value
+  }
+
+  function onCorpRegistryCancelledChange(value) {
+    bundleCorpRegistryIncludeCancelled = value
   }
 
   // ── 키워드 행 추가/수집 ────────────────────────────────────────
@@ -2431,18 +2530,6 @@ app.get('/ppt-generate', (c) => {
   }
 
   // ── menu_code → ATTACHMENT_TYPES 키 매핑 ─────────────────────
-  var MENU_CODE_TO_TYPE = {
-    'ATT_COVER':       'cover',
-    'ATT_SCHEDULE':    'schedule',
-    'ATT_CAREER':      'career',
-    'ATT_CONSENT':     'consent',
-    'ATT_STAMP_NO':    null,
-    'ATT_STAMP_YES':   null,
-    'ATT_EMPLOYMENT':  'employmentCert',
-    'ATT_CAREER_CERT': 'careerCert',
-    'ATT_STAFFING':    'staffingStatus'
-  }
-  var STAMP_TYPES = ['bizreg','taxcert','localtaxcert','corpregistry','insurance']
   var PPTX_MIME   = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
   function b64ToFile(b64, name) {
@@ -2458,40 +2545,41 @@ app.get('/ppt-generate', (c) => {
   // → 서버 API가 keywords를 FormData로 받아 처리하도록 전달
   async function confirmGenerateBundle() {
     if (!bundleProjectId) return
-    var selected = bundleMenus.filter(function(m) { return bundleItemChecked[m.id] })
-    if (!selected.length) { alert('생성할 항목을 하나 이상 체크해주세요.'); return }
+    var selectedIds = Object.keys(bundleItemChecked).filter(function(id) { return bundleItemChecked[id] })
+    if (!selectedIds.length) { alert('생성할 항목을 하나 이상 체크해주세요.'); return }
 
     // 표지 확인
-    var coverMenu = bundleMenus.find(function(m) { return m.menu_code === 'ATT_COVER' })
+    var coverMenu = findMenuByCode('ATT_COVER')
     if (!coverMenu || !coverMenu.templates || !coverMenu.templates[0] || !coverMenu.templates[0].pptx_b64_key) {
       alert('표지(ATT_COVER) 템플릿이 등록되지 않았습니다.\\nPPT 템플릿 관리 → 첨부 탭에서 먼저 등록해주세요.')
       return
     }
 
-    // 항목별 타입키 + 템플릿 유효성 검사
+    // 항목별 템플릿 유효성 검사 — 여러 항목이 같은 템플릿 슬롯(templateMenuCode)을
+    // 공유할 수 있다(사업자등록증/납세증명서/법인등기부등본/4대보험 → 범용 템플릿(도장O)).
     var order = []
     var missing = []
-    var unsupported = []
-    selected.forEach(function(m) {
-      if (m.menu_code === 'ATT_COVER') return
-      var typeKey = MENU_CODE_TO_TYPE[m.menu_code]
-      if (!typeKey) { unsupported.push(m.menu_name); return }
-      if (!m.templates || !m.templates[0] || !m.templates[0].pptx_b64_key) { missing.push(m.menu_name); return }
-      order.push({ key: typeKey, menu: m })
+    selectedIds.forEach(function(id) {
+      var it = ITEM_CATALOG.filter(function(x) { return x.id === id })[0]
+      if (!it) return
+      var menu = findMenuByCode(it.templateMenuCode)
+      if (!menu || !menu.templates || !menu.templates[0] || !menu.templates[0].pptx_b64_key) { missing.push(it.label); return }
+      order.push({ key: it.typeKey, menu: menu, catalog: it })
     })
 
     if (missing.length) {
       alert('템플릿 미등록 항목:\\n' + missing.join('\\n') + '\\n\\nPPT 템플릿 관리 → 첨부 탭에서 먼저 등록해주세요.')
       return
     }
-    if (!order.length && !unsupported.length) {
+    if (!order.length) {
       alert('생성할 수 있는 항목이 없습니다.')
       return
     }
-    if (unsupported.length && !order.length) {
-      alert('선택한 항목(' + unsupported.join(', ') + ')은 현재 API에서 지원되지 않습니다.')
-      return
-    }
+
+    var stampNeeded = order.some(function(o) { return o.catalog.stamp })
+    if (stampNeeded && !bundleStampType) { alert('찍을 도장(원본대조필/사실과상위없음)을 선택해주세요.'); return }
+    var corpNeeded = order.some(function(o) { return o.catalog.corpRegistry })
+    if (corpNeeded && bundleCorpRegistryIncludeCancelled === null) { alert('법인등기부등본의 말소사항 포함 여부를 선택해주세요.'); return }
 
     var btn = document.getElementById('bundleConfirmBtn')
     btn.disabled = true
@@ -2502,6 +2590,8 @@ app.get('/ppt-generate', (c) => {
       var fd = new FormData()
       fd.append('cover', b64ToFile(coverMenu.templates[0].pptx_b64_key, 'cover.pptx'))
       fd.append('order', JSON.stringify(order.map(function(o) { return o.key })))
+      if (stampNeeded) fd.append('stampType', bundleStampType)
+      if (corpNeeded) fd.append('corpRegistryIncludeCancelled', bundleCorpRegistryIncludeCancelled)
 
       // 키워드 치환 맵 전달
       var kwMap = collectKeywords()
