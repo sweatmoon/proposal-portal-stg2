@@ -237,23 +237,47 @@ app.post('/:projectId', async (c) => {
       if (!ATTACHMENT_TYPES[id]) return c.json({ ok: false, error: `알 수 없는 첨부 항목: ${id}` }, 400)
     }
 
-    // ── 선택된 항목들을 순서대로 생성 (제목 앞 번호는 선택 순서 그대로: 1. 2. 3. ...) ────
+    // ── 선택된 항목들을 순서대로 생성. 항목 하나가 실패해도(NAS 연결 실패, 템플릿
+    // 누락 등) 전체를 막지 않고 그 항목만 건너뛰고 계속 진행한다 — 결과 로그로
+    // 어떤 항목이 왜 빠졌는지 보여주기 위함(2026-09-09 사용자 확인 — "제대로
+    // 생성됐는지 어떤 부분이 왜 생성이 안됐는지 그런거 보여주기"). 제목 앞 번호는
+    // 실제로 성공한 항목들 기준으로 다시 매긴다(건너뛴 항목 때문에 번호가 비지 않도록).
+    interface GenerationLogEntry {
+      id: string
+      label: string
+      ok: boolean
+      error?: string
+    }
     const sectionZips: JSZip[] = []
-    for (let i = 0; i < order.length; i++) {
-      const id = order[i]
+    const succeededLabels: string[] = []
+    const log: GenerationLogEntry[] = []
+    for (const id of order) {
+      const label = ATTACHMENT_TYPES[id].label
       const file = form.get(id) as File | null
       if (!file || file.size === 0) {
-        return c.json({ ok: false, error: `"${ATTACHMENT_TYPES[id].label}" 템플릿(.pptx) 파일이 필요합니다` }, 400)
+        log.push({ id, label, ok: false, error: '템플릿(.pptx) 파일이 없습니다' })
+        continue
       }
-      const buf = Buffer.from(await file.arrayBuffer())
-      const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${i + 1}. `)
-      sectionZips.push(zip)
+      try {
+        const buf = Buffer.from(await file.arrayBuffer())
+        const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${succeededLabels.length + 1}. `)
+        sectionZips.push(zip)
+        succeededLabels.push(label)
+        log.push({ id, label, ok: true })
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.error(`[ppt-attachment-bundle] "${label}" 생성 실패:`, e)
+        log.push({ id, label, ok: false, error: msg })
+      }
     }
 
-    // ── 표지: 선택된 순서 그대로 라벨 목록을 만들어 번호를 새로 매긴다 ──────
+    if (sectionZips.length === 0) {
+      return c.json({ ok: false, error: '생성된 첨부가 없습니다 — 아래 로그를 확인해주세요', log }, 500)
+    }
+
+    // ── 표지: 실제로 성공한 항목만으로 목차를 만든다 ──────
     const coverBuf = Buffer.from(await coverFile.arrayBuffer())
-    const labels = order.map(id => ATTACHMENT_TYPES[id].label)
-    const { zip: coverZip, projectName } = await buildCoverZip(coverBuf, projectId, labels)
+    const { zip: coverZip, projectName } = await buildCoverZip(coverBuf, projectId, succeededLabels)
 
     const merged = await mergeDecksSharingMaster([coverZip, ...sectionZips])
     const outBuffer = await merged.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } })
@@ -261,6 +285,7 @@ app.post('/:projectId', async (c) => {
     const safeName = (projectName || '자유생성').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)
     c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
     c.header('Content-Disposition', `attachment; filename="${encodeURIComponent('A_첨부_' + safeName)}.pptx"`)
+    c.header('X-Generation-Log', encodeURIComponent(JSON.stringify(log)))
     return c.body(new Uint8Array(outBuffer))
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

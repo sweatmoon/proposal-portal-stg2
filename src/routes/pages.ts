@@ -2006,7 +2006,30 @@ app.get('/ppt-generate', (c) => {
       </div>
     </section>
 
+    <!-- ══════════════════════════════════════════════════
+         생성 결과 로그 — 모달 대신 페이지 맨 아래 상시 로그란(2026-09-10 사용자 확인 —
+         "HTML 업로드 탭에 있는 처리 로그처럼"). 위 두 섹션(사업 기반 / 자유 첨부 생성)
+         어느 쪽에서 생성해도 여기 한 곳에 쌓인다. 서버가 X-Generation-Log 헤더(성공 시)
+         또는 JSON 응답의 log 필드(전체 실패 시)로 준 항목별 성공/실패를 그대로 찍는다.
+    ══════════════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-slate-700 text-sm"><i class="fas fa-terminal mr-2 text-slate-400"></i>생성 결과 로그</h3>
+        <button onclick="clearBundleLog()" class="text-xs text-slate-400 hover:text-slate-600 transition">초기화</button>
+      </div>
+      <div id="bundleLog" class="min-h-16 max-h-64 overflow-y-auto space-y-0.5 bg-slate-900 rounded-xl p-4">
+        <p class="log-line log-info">대기 중... 위에서 첨부PPT를 생성하면 결과가 여기 표시됩니다.</p>
+      </div>
+    </section>
+
   </div>
+
+  <style>
+    .log-line { font-family: monospace; font-size: 13px; }
+    .log-ok   { color: #4ade80; }
+    .log-err  { color: #f87171; }
+    .log-info { color: #60a5fa; }
+  </style>
 
   <!-- ── 첨부PPT 생성 모달 ── -->
   <div id="bundleModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -2375,6 +2398,32 @@ app.get('/ppt-generate', (c) => {
     document.getElementById('bundleModal').classList.add('hidden')
   }
 
+  // ── 생성 결과 로그 (모달 대신 페이지 맨 아래 상시 로그란, 2026-09-10 사용자 확인 —
+  // "HTML 업로드 탭에 있는 처리 로그처럼") — 사업 기반/자유 생성 둘 다 공유해서 쓴다. ──
+  function addBundleLog(type, msg) {
+    var log = document.getElementById('bundleLog')
+    var p = document.createElement('p')
+    var ts = new Date().toLocaleTimeString('ko-KR', {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+    p.className = 'log-line log-' + type
+    p.textContent = '[' + ts + '] ' + msg
+    log.appendChild(p)
+    log.scrollTop = log.scrollHeight
+  }
+  function clearBundleLog() {
+    document.getElementById('bundleLog').innerHTML = '<p class="log-line log-info">로그 초기화됨</p>'
+  }
+  /** log: [{id,label,ok,error?}] — 서버가 X-Generation-Log 헤더(성공 시) 또는 JSON
+   *  응답의 log 필드(전체 실패 시)로 준다. fatalError는 항목이 하나도 성공 못했을 때
+   *  (또는 cover/order 자체가 잘못됐을 때) 서버가 준 사유 — 있으면 맨 위에 따로 찍는다. */
+  function renderBundleLogResult(sourceLabel, log, fatalError) {
+    addBundleLog('info', '── ' + sourceLabel + ' 생성 결과 ──')
+    if (fatalError) addBundleLog('err', fatalError)
+    ;(log || []).forEach(function(item) {
+      if (item.ok) addBundleLog('ok', item.label + ' 생성 완료')
+      else addBundleLog('err', item.label + ' 실패: ' + (item.error || '알 수 없는 오류'))
+    })
+  }
+
   // ── menu_code → ATTACHMENT_TYPES 키 매핑 ─────────────────────
   var MENU_CODE_TO_TYPE = {
     'ATT_COVER':       'cover',
@@ -2473,8 +2522,12 @@ app.get('/ppt-generate', (c) => {
       var r = await fetch('/api/ppt-attachment-bundle/' + bundleProjectId, { method: 'POST', body: fd })
       if (!r.ok) {
         var ej = await r.json().catch(function() { return {} })
-        throw new Error(ej.error || ('생성 실패 (' + r.status + ')'))
+        renderBundleLogResult('사업 기반', ej.log || [], ej.error || ('생성 실패 (' + r.status + ')'))
+        return
       }
+      var logHeader = r.headers.get('X-Generation-Log')
+      var log = []
+      if (logHeader) { try { log = JSON.parse(decodeURIComponent(logHeader)) } catch(e2) {} }
       var blob = await r.blob()
       var cd = r.headers.get('Content-Disposition') || ''
       var m2 = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';]+)/i)
@@ -2483,8 +2536,9 @@ app.get('/ppt-generate', (c) => {
       var a = document.createElement('a'); a.href = url; a.download = filename
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
+      renderBundleLogResult('사업 기반', log, null)
     } catch(e) {
-      alert('첨부PPT 생성 실패: ' + e.message)
+      addBundleLog('err', '사업 기반 첨부PPT 생성 실패: ' + e.message)
     } finally {
       btn.disabled = false
       btn.innerHTML = '<i class="fas fa-magic mr-1"></i>생성'
@@ -2693,8 +2747,12 @@ app.get('/ppt-generate', (c) => {
       var r = await fetch('/api/ppt-attachment-bundle/0', { method: 'POST', body: fd })
       if (!r.ok) {
         var ej = await r.json().catch(function(){return{}})
-        throw new Error(ej.error || ('생성 실패 (' + r.status + ')'))
+        renderBundleLogResult('자유 생성', ej.log || [], ej.error || ('생성 실패 (' + r.status + ')'))
+        return
       }
+      var logHeader = r.headers.get('X-Generation-Log')
+      var log = []
+      if (logHeader) { try { log = JSON.parse(decodeURIComponent(logHeader)) } catch(e2) {} }
       var blob = await r.blob()
       var cd = r.headers.get('Content-Disposition') || ''
       var m2 = cd.match(/filename\*?=["']?(?:UTF-8'')?([^"';]+)/i)
@@ -2703,8 +2761,9 @@ app.get('/ppt-generate', (c) => {
       var a = document.createElement('a'); a.href = url; a.download = filename
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
+      renderBundleLogResult('자유 생성', log, null)
     } catch(e) {
-      alert('첨부PPT 생성 실패: ' + e.message)
+      addBundleLog('err', '자유 생성 첨부PPT 생성 실패: ' + e.message)
     } finally {
       btn.disabled = false
       btn.innerHTML = '<i class="fas fa-magic mr-2"></i>첨부PPT 생성'

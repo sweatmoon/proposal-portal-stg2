@@ -1,5 +1,5 @@
 # ── 1단계: 빌드 ──────────────────────────────────────────────
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 WORKDIR /app
 
 # 의존성 먼저 설치 (캐시 활용)
@@ -15,7 +15,7 @@ RUN npm run build
 RUN cp src/db/schema.sql dist/db/schema.sql
 
 # ── 2단계: 실행 ──────────────────────────────────────────────
-FROM node:20-slim AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
