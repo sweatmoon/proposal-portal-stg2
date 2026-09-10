@@ -2325,10 +2325,16 @@ app.get('/ppt-generate', (c) => {
     personnelKwMap = {}
     document.getElementById('bundleModalProjectName').textContent = projectName
     document.getElementById('bundleModal').classList.remove('hidden')
-    // 키워드 행 초기화
-    document.getElementById('kwGlobalRows').innerHTML = ''
-    document.getElementById('personnelKwSection').classList.add('hidden')
-    document.getElementById('personnelKwRows').innerHTML = ''
+    // 키워드 행 초기화 — "② 인력 선택/③ 키워드 변환" UI는 아직 이 모달에 마크업이 없고
+    // 백엔드도 keywords/personnelKeywords/personnelIds를 안 읽는 미완성 기능이라, 그
+    // 요소들이 없어서 여기서 죽지 않게 존재할 때만 건드린다(2026-09-10 — 이 3줄 때문에
+    // 모달이 열리자마자 죽어서 항목 목록 자체가 안 뜨던 버그).
+    var kwGlobalRowsEl = document.getElementById('kwGlobalRows')
+    if (kwGlobalRowsEl) kwGlobalRowsEl.innerHTML = ''
+    var personnelKwSectionEl = document.getElementById('personnelKwSection')
+    if (personnelKwSectionEl) personnelKwSectionEl.classList.add('hidden')
+    var personnelKwRowsEl = document.getElementById('personnelKwRows')
+    if (personnelKwRowsEl) personnelKwRowsEl.innerHTML = ''
 
     var listEl = document.getElementById('bundleItemList')
     listEl.innerHTML = '<div class="text-slate-400 text-xs text-center py-4"><i class="fas fa-spinner fa-spin mr-1"></i>항목 불러오는 중...</div>'
