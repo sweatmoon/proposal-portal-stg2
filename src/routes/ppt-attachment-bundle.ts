@@ -73,8 +73,9 @@
  */
 import { Hono } from 'hono'
 import type JSZip from 'jszip'
-import { query } from '../db/client.js'
+import { query, queryOne } from '../db/client.js'
 import type { AttachmentBuildKind } from '../lib/attachment-build-kind.js'
+import { buildGenericImageReplaceZip } from '../lib/generic-image-replace-doc.js'
 import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip, type FreeCareerOptions } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
@@ -103,6 +104,20 @@ function validateStampType(form: FormData): CompanyStampType {
   return stampType
 }
 
+/** IMAGE_REPLACE 항목(표준재무제표/사업자등록증/납세증명서류/법인등기부등본/4대보험)의
+ *  이름/NAS 경로는 "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 관리자가 직접 수정할 수
+ *  있다(2026-09-10 사용자 확인 — "이름, 경로 수정이 가능해야 해... 변경 후에 실제 PPT
+ *  만드는 모달에서 바로 쓸 수 있도록"). 그 값을 매 생성 시점에 DB에서 그대로 읽어와
+ *  각 항목의 build*Zip에 override로 넘긴다 — 코드 재배포 없이 수정이 즉시 반영된다. */
+async function resolveImageReplaceOverride(menuCode: string): Promise<{ label?: string; nasPath?: string } | undefined> {
+  const row = await queryOne<{ menu_name: string; nas_path: string | null }>(
+    `SELECT menu_name, nas_path FROM ppt_menus WHERE menu_code = $1`,
+    [menuCode]
+  )
+  if (!row) return undefined
+  return { label: row.menu_name, nasPath: row.nas_path || undefined }
+}
+
 /** 첨부 항목 레지스트리 — 나중에 새 첨부가 생기면 여기에 한 줄만 추가하면 된다.
  *  build()의 titlePrefix는 이 항목이 선택된 순서에서 몇 번째인지("1. " 등)이며, 각 항목의
  *  실제 슬라이드 제목([제목] 자리)에 그대로 반영된다 — 표지 목차 번호와 맞춰서.
@@ -115,14 +130,44 @@ function validateStampType(form: FormData): CompanyStampType {
  *  PERSON_PAGES가 아닌 항목(회사서류/표 형태 등 — 애초에 사람 단위 개념이 없는 문서)은
  *  이 인자를 무시하고 항상 사업 전체 기준 동일한 내용을 만든다 — "인력만큼"으로 설정돼도
  *  그 결과를 사람마다 그대로 재사용해서 묶는다(자세한 건 buildSectionsByPersonnel 참고). */
-const ATTACHMENT_TYPES: Record<
-  string,
-  {
-    label: string
-    buildKind: AttachmentBuildKind
-    build: (buf: Buffer, projectId: number, form: FormData, titlePrefix: string, personnelNameFilter?: string[]) => Promise<JSZip | null>
+/**
+ * ATTACHMENT_TYPES에 없는 id(= "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 "+"로 새로
+ * 등록한 첨부서류)를 만나면 DB에서 그 메뉴를 찾아 즉석에서 항목 정의를 만든다(2026-09-10
+ * 사용자 확인 — "이 탭에서 + 누르고 이름과 경로만 입력하면 쓸 수 있도록"). build_kind가
+ * IMAGE_REPLACE이고, 부모가 "범용 템플릿(도장O)"(ATT_STAMP_YES) 또는 "범용 템플릿(도장X)"
+ * (ATT_STAMP_NO)일 때만 유효하다 — 도장O 밑이면 stampType을 받아 도장까지 찍고, 도장X
+ * 밑이면 도장 없이 이미지만 끼워넣는다(자세한 조립은 generic-image-replace-doc.ts 참고).
+ * 못 찾거나 조건에 안 맞으면 undefined(호출 쪽에서 "알 수 없는 첨부 항목" 처리).
+ */
+async function resolveDynamicAttachmentType(menuCode: string): Promise<AttachmentTypeDef | undefined> {
+  const row = await queryOne<{ menu_name: string; nas_path: string | null; build_kind: string | null; parent_id: number | null }>(
+    `SELECT menu_name, nas_path, build_kind, parent_id FROM ppt_menus WHERE menu_code = $1 AND category = 'attachment'`,
+    [menuCode]
+  )
+  if (!row || row.build_kind !== 'IMAGE_REPLACE' || !row.parent_id || !row.nas_path) return undefined
+  const parent = await queryOne<{ menu_code: string }>(`SELECT menu_code FROM ppt_menus WHERE id = $1`, [row.parent_id])
+  if (!parent || (parent.menu_code !== 'ATT_STAMP_YES' && parent.menu_code !== 'ATT_STAMP_NO')) return undefined
+  const needsStamp = parent.menu_code === 'ATT_STAMP_YES'
+  const label = row.menu_name
+  const nasPath = row.nas_path
+  return {
+    label,
+    buildKind: 'IMAGE_REPLACE',
+    build: async (buf, projectId, form, titlePrefix) => {
+      const stampType = needsStamp ? validateStampType(form) : null
+      const { zip } = await buildGenericImageReplaceZip(buf, projectId, label, nasPath, stampType, titlePrefix)
+      return zip
+    },
   }
-> = {
+}
+
+interface AttachmentTypeDef {
+  label: string
+  buildKind: AttachmentBuildKind
+  build: (buf: Buffer, projectId: number, form: FormData, titlePrefix: string, personnelNameFilter?: string[]) => Promise<JSZip | null>
+}
+
+const ATTACHMENT_TYPES: Record<string, AttachmentTypeDef> = {
   schedule: {
     label: '감리원 일정 현황표',
     buildKind: 'SHARED_TABLE',
@@ -165,39 +210,45 @@ const ATTACHMENT_TYPES: Record<
       return result ? result.zip : null
     },
   },
-  financial: {
+  ATT_FINANCIAL: {
     label: '표준재무제표',
     buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, _form, titlePrefix) => (await buildFinancialStatementZip(buf, projectId, titlePrefix)).zip,
+    build: async (buf, projectId, _form, titlePrefix) => {
+      const override = await resolveImageReplaceOverride('ATT_FINANCIAL')
+      return (await buildFinancialStatementZip(buf, projectId, titlePrefix, override)).zip
+    },
   },
-  bizreg: {
+  ATT_BIZREG: {
     label: '사업자등록증',
     buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
-      const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType, titlePrefix)
+      const override = await resolveImageReplaceOverride('ATT_BIZREG')
+      const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType, titlePrefix, override)
       return zip
     },
   },
-  taxcert: {
+  ATT_TAXCERT: {
     label: '국세 납세증명서',
     buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
-      const { zip } = await buildTaxCertificateZip(buf, projectId, stampType, titlePrefix)
+      const override = await resolveImageReplaceOverride('ATT_TAXCERT')
+      const { zip } = await buildTaxCertificateZip(buf, projectId, stampType, titlePrefix, override)
       return zip
     },
   },
-  localtaxcert: {
+  ATT_LOCALTAXCERT: {
     label: '지방세 납세증명서',
     buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
-      const { zip } = await buildLocalTaxCertificateZip(buf, projectId, stampType, titlePrefix)
+      const override = await resolveImageReplaceOverride('ATT_LOCALTAXCERT')
+      const { zip } = await buildLocalTaxCertificateZip(buf, projectId, stampType, titlePrefix, override)
       return zip
     },
   },
-  corpregistry: {
+  ATT_CORPREGISTRY: {
     label: '법인등기부등본',
     buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
@@ -206,16 +257,18 @@ const ATTACHMENT_TYPES: Record<
       if (includeCancelledRaw !== 'true' && includeCancelledRaw !== 'false') {
         throw new Error('법인등기부등본 말소사항 포함 여부를 선택해주세요')
       }
-      const { zip } = await buildCorporateRegistryZip(buf, projectId, includeCancelledRaw === 'true', stampType, titlePrefix)
+      const override = await resolveImageReplaceOverride('ATT_CORPREGISTRY')
+      const { zip } = await buildCorporateRegistryZip(buf, projectId, includeCancelledRaw === 'true', stampType, titlePrefix, override)
       return zip
     },
   },
-  insurance: {
+  ATT_INSURANCE: {
     label: '4대보험 가입확인서',
     buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = validateStampType(form)
-      const { zip } = await buildInsuranceEnrollmentZip(buf, projectId, stampType, titlePrefix)
+      const override = await resolveImageReplaceOverride('ATT_INSURANCE')
+      const { zip } = await buildInsuranceEnrollmentZip(buf, projectId, stampType, titlePrefix, override)
       return zip
     },
   },
@@ -262,13 +315,21 @@ interface BuildSectionsResult {
  *  부분이 왜 생성이 안됐는지 그런거 보여주기"). 제목 앞 번호(`${n}. `)는 실제로 성공한
  *  항목들 기준으로 다시 매긴다(건너뛴 항목 때문에 번호가 비지 않도록) — titlePrefixOffset을
  *  주면 그 수만큼 밀려서 매겨진다("정렬 기준: 인력별"에서 인력별로 묶인 항목들 뒤에 이어
- *  붙는 "하나만" 항목들의 번호가 1부터 다시 시작하지 않도록 buildSectionsByPersonnel이 씀). */
-async function buildSectionsWithLog(order: string[], form: FormData, projectId: number, titlePrefixOffset = 0): Promise<BuildSectionsResult> {
+ *  붙는 "하나만" 항목들의 번호가 1부터 다시 시작하지 않도록 buildSectionsByPersonnel이 씀).
+ *  registry: 이번 요청에서 쓸 항목 레지스트리 — 정적 ATTACHMENT_TYPES에 "+"로 새로 추가된
+ *  동적 항목(resolveDynamicAttachmentType)을 합친 것을 route 핸들러가 넘긴다. */
+async function buildSectionsWithLog(
+  order: string[],
+  form: FormData,
+  projectId: number,
+  titlePrefixOffset = 0,
+  registry: Record<string, AttachmentTypeDef> = ATTACHMENT_TYPES
+): Promise<BuildSectionsResult> {
   const sectionZips: JSZip[] = []
   const succeededLabels: string[] = []
   const log: GenerationLogEntry[] = []
   for (const id of order) {
-    const label = ATTACHMENT_TYPES[id].label
+    const label = registry[id].label
     const file = form.get(id) as File | null
     if (!file || file.size === 0) {
       log.push({ id, label, ok: false, error: '템플릿(.pptx) 파일이 없습니다' })
@@ -276,7 +337,7 @@ async function buildSectionsWithLog(order: string[], form: FormData, projectId: 
     }
     try {
       const buf = Buffer.from(await file.arrayBuffer())
-      const zip = await ATTACHMENT_TYPES[id].build(buf, projectId, form, `${titlePrefixOffset + succeededLabels.length + 1}. `)
+      const zip = await registry[id].build(buf, projectId, form, `${titlePrefixOffset + succeededLabels.length + 1}. `)
       if (!zip) {
         log.push({ id, label, ok: false, error: '해당하는 인력이 없습니다' })
         continue
@@ -313,7 +374,8 @@ async function buildSectionsByPersonnel(
   order: string[],
   form: FormData,
   projectId: number,
-  repeatMode: Record<string, string>
+  repeatMode: Record<string, string>,
+  registry: Record<string, AttachmentTypeDef> = ATTACHMENT_TYPES
 ): Promise<BuildSectionsResult> {
   const groupIds = order.filter(id => repeatMode[id] === 'all')
   const singleIds = order.filter(id => repeatMode[id] !== 'all')
@@ -329,13 +391,13 @@ async function buildSectionsByPersonnel(
     const rosterNames = roster.map(r => r.person_name)
 
     if (!rosterNames.length) {
-      for (const id of groupIds) log.push({ id, label: ATTACHMENT_TYPES[id].label, ok: false, error: '이 사업에 투입된 인력이 없습니다' })
+      for (const id of groupIds) log.push({ id, label: registry[id].label, ok: false, error: '이 사업에 투입된 인력이 없습니다' })
     } else {
       // 항목별로 "사람 이름 → zip"(PERSON_PAGES) 또는 zip 하나(그 외, 전원 공용)를 먼저
       // 만들어둔다 — PERSON_PAGES가 아닌 항목을 사람 수만큼 반복 생성하는 낭비를 피한다.
       const perIdSource = new Map<string, Map<string, JSZip> | JSZip | null>()
       for (const id of groupIds) {
-        const def = ATTACHMENT_TYPES[id]
+        const def = registry[id]
         const file = form.get(id) as File | null
         if (!file || file.size === 0) {
           perIdSource.set(id, null)
@@ -383,7 +445,7 @@ async function buildSectionsByPersonnel(
           const zip = source instanceof Map ? source.get(personName) : source
           if (zip) {
             sectionZips.push(zip)
-            if (!succeededLabels.includes(ATTACHMENT_TYPES[id].label)) succeededLabels.push(ATTACHMENT_TYPES[id].label)
+            if (!succeededLabels.includes(registry[id].label)) succeededLabels.push(registry[id].label)
           }
         }
       }
@@ -391,7 +453,7 @@ async function buildSectionsByPersonnel(
   }
 
   // "하나만" 항목들은 지금까지처럼(서류별 모드와 동일) 항목당 한 번씩, 인력별 묶음 뒤에 이어 나열한다.
-  const singleResult = await buildSectionsWithLog(singleIds, form, projectId, succeededLabels.length)
+  const singleResult = await buildSectionsWithLog(singleIds, form, projectId, succeededLabels.length, registry)
   sectionZips.push(...singleResult.sectionZips)
   succeededLabels.push(...singleResult.succeededLabels)
   log.push(...singleResult.log)
@@ -427,8 +489,16 @@ app.post('/:projectId', async (c) => {
     } catch {
       return c.json({ ok: false, error: 'order는 비어있지 않은 JSON 배열이어야 합니다' }, 400)
     }
+    // ATTACHMENT_TYPES에 없는 id는 "+"로 새로 추가된 이미지 치환 항목일 수 있으니 DB에서
+    // 한 번 더 찾아본다(resolveDynamicAttachmentType, 2026-09-10 사용자 확인) — 이번
+    // 요청에서만 쓸 registry에 합쳐서, 그 뒤 모든 생성 로직이 이 registry 하나만 보면
+    // 되게 한다.
+    const registry: Record<string, AttachmentTypeDef> = { ...ATTACHMENT_TYPES }
     for (const id of order) {
-      if (!ATTACHMENT_TYPES[id]) return c.json({ ok: false, error: `알 수 없는 첨부 항목: ${id}` }, 400)
+      if (registry[id]) continue
+      const dynamicType = await resolveDynamicAttachmentType(id)
+      if (!dynamicType) return c.json({ ok: false, error: `알 수 없는 첨부 항목: ${id}` }, 400)
+      registry[id] = dynamicType
     }
 
     // ── 정렬 기준: 서류별(기본, 지금까지 동작)/인력별 ─────────────────────
@@ -450,8 +520,8 @@ app.post('/:projectId', async (c) => {
     // buildSectionsWithLog/buildSectionsByPersonnel 참고) ──────────────────
     const { sectionZips, succeededLabels, log } =
       sortBasis === 'personnel'
-        ? await buildSectionsByPersonnel(order, form, projectId, repeatMode)
-        : await buildSectionsWithLog(order, form, projectId)
+        ? await buildSectionsByPersonnel(order, form, projectId, repeatMode, registry)
+        : await buildSectionsWithLog(order, form, projectId, 0, registry)
 
     if (sectionZips.length === 0) {
       return c.json({ ok: false, error: '생성된 첨부가 없습니다 — 아래 로그를 확인해주세요', log }, 500)

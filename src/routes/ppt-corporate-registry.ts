@@ -20,7 +20,7 @@ import type JSZip from 'jszip'
 import { queryOne } from '../db/client.js'
 import { pdfAllPagesToPng } from '../lib/pdf-render.js'
 import { buildStampedDeckZip } from '../lib/pptx-stamped-doc.js'
-import { fetchCorporateRegistryPdf, fetchCompanyStampPng, type CompanyStampType } from '../lib/nas-client.js'
+import { fetchCorporateRegistryPdf, fetchCompanyStampPng, fetchLatestPdfFromFolder, type CompanyStampType } from '../lib/nas-client.js'
 
 const app = new Hono()
 
@@ -32,12 +32,16 @@ export interface CorporateRegistryZipResult {
   projectName: string
 }
 
+/** override: "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 이름/NAS 경로를 바꿔 등록해뒀으면
+ *  그 값을 쓴다(2026-09-10 사용자 확인). 말소사항 포함/미포함 필터(predicate)는 경로가
+ *  바뀌어도 그대로 적용한다. 넘기지 않으면 기존 하드코딩 경로를 그대로 쓴다. */
 export async function buildCorporateRegistryZip(
   templateBuf: Buffer,
   projectId: number,
   includeCancelled: boolean,
   stampType: CompanyStampType,
-  titlePrefix = ''
+  titlePrefix = '',
+  override?: { label?: string; nasPath?: string }
 ): Promise<CorporateRegistryZipResult> {
   const project = await queryOne<{ project_name: string }>(
     `SELECT project_name FROM audit_projects WHERE id = $1`,
@@ -45,16 +49,22 @@ export async function buildCorporateRegistryZip(
   )
   if (!project) throw new Error('사업을 찾을 수 없습니다')
 
+  const label = override?.label || PAGE_TITLE
+  const predicate = includeCancelled
+    ? (name: string) => name.includes('말소사항포함')
+    : (name: string) => !name.includes('말소사항포함')
   const [sourcePdf, stampPng] = await Promise.all([
-    fetchCorporateRegistryPdf(includeCancelled),
+    override?.nasPath
+      ? fetchLatestPdfFromFolder(override.nasPath, label, predicate)
+      : fetchCorporateRegistryPdf(includeCancelled),
     fetchCompanyStampPng(stampType),
   ])
-  if (!sourcePdf) throw new Error('NAS에서 법인등기부등본 원본 파일을 가져오지 못했습니다')
+  if (!sourcePdf) throw new Error(`NAS에서 ${label} 원본 파일을 가져오지 못했습니다`)
 
   const bigImages = await pdfAllPagesToPng(sourcePdf)
 
   const commonMap: Record<string, string> = {
-    '[제목]': `${titlePrefix}${PAGE_TITLE}${includeCancelled ? '(말소사항포함)' : ''}`,
+    '[제목]': `${titlePrefix}${label}${includeCancelled ? '(말소사항포함)' : ''}`,
     '[감리사업명]': project.project_name,
   }
 

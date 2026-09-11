@@ -139,7 +139,9 @@ async function fetchPptxFromFolder(folder: string, label: string): Promise<Buffe
  *  법인등기부등본처럼 "날짜가 파일명 뒤에 붙어서 계속 새 파일이 추가되는" 폴더에서
  *  "가장 최신 파일"을 고를 때 쓰는 공용 패턴(2026-09-03 사용자 확인 — "파일이름상으로"
  *  가장 최신). */
-async function fetchLatestPdfFromFolder(
+/** 법인등기부등본의 "이 템플릿 관리 → 첨부 → 이미지 치환" 편집(경로 수정)에서도 predicate
+ *  (말소사항 포함/미포함)와 함께 그대로 재사용하므로 export 했다(2026-09-10). */
+export async function fetchLatestPdfFromFolder(
   folder: string,
   label: string,
   predicate: (name: string) => boolean = () => true
@@ -165,7 +167,11 @@ async function fetchLatestPdfFromFolder(
  *  오름차순 정렬했을 때 마지막) 것 하나를 찾아 통째로 받아온다. 확장자가 섞여있어도
  *  날짜가 파일명에 고정폭으로 박혀있는 한 문자열 정렬로 최신 판단이 가능하다(2026-09-09
  *  — 국세 납세증명서: pptx/pdf 섞여있는 폴더에서 최신 파일 고르기용으로 추가). */
-async function fetchLatestPptxOrPdfFromFolder(
+/** 관리자가 "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 직접 등록한 NAS 경로(이름+경로만
+ *  입력)로 첨부서류를 만들 때도 이 함수를 그대로 쓴다(2026-09-10 사용자 확인 — "이름과
+ *  경로만 입력하면 쓸 수 있도록") — 그래서 export 했다. 아래 6개 고정 항목(표준재무제표/
+ *  사업자등록증/납세증명서류/법인등기부등본/4대보험)도 이제 이 함수로 통일해서 쓴다. */
+export async function fetchLatestPptxOrPdfFromFolder(
   folder: string,
   label: string
 ): Promise<{ buf: Buffer; isPdf: boolean } | null> {

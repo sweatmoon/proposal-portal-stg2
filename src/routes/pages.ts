@@ -2214,29 +2214,24 @@ app.get('/ppt-generate', (c) => {
   var bundleStampType = null          // '원본대조필' | '사실과상위없음' | null
   var bundleCorpRegistryIncludeCancelled = null  // 'true' | 'false' | null
 
-  // 실제 첨부 문서 종류 카탈로그 — DB(ppt_menus)에는 표지/일정표/실적경력/동의서/재직증명서/
-  // 경력증명서/상근인력현황과, 이들이 공유하는 "범용 템플릿(도장X/도장O)" 슬롯만 있고,
-  // 사업자등록증/납세증명서/법인등기부등본/4대보험/표준재무제표는 각자 별도 템플릿을
-  // 올릴 필요 없이 그 공유 슬롯(templateMenuCode)을 그대로 쓴다(2026-09-03 원래 설계 —
-  // "전부 범용 템플릿 쓸 거임"). group으로 "필수 3개/회사/제안" 분류(2026-09-10 사용자 확인).
-  // perPerson: 인력 1명당 1건씩 반복 생성되는 서류 — 이 항목만 "인력만큼/하나만" 드롭박스를
-  // 보여준다(2026-09-10 사용자 확인). 나머지(표 형태로 전원을 한 표에 담거나, 인력과
-  // 무관한 회사 서류)는 반복 개념 자체가 없어서 기존처럼 템플릿 상태 아이콘만 보여준다.
-  // 지금은 드롭박스 선택 상태만 UI에 보관 — 실제 생성 로직에는 아직 연결 안 됨.
-  var ITEM_CATALOG = [
+  // 실제 첨부 문서 종류 카탈로그. "회사"(company) 그룹은 이제 고정 배열이 아니라 DB(ppt_menus)
+  // 에서 "범용 템플릿(도장X/도장O)" 슬롯의 자식 메뉴로 동적으로 읽어온다(2026-09-10 사용자
+  // 확인 — "이 탭에서 + 누르고 이름과 경로만 입력하면 쓸 수 있도록", PPT 템플릿 관리 →
+  // 첨부 → 이미지 치환 탭에서 추가/수정/삭제) — openBundleModal()이 매번 다시 만든다.
+  // STATIC_ITEM_CATALOG는 그 외(인력/표 형태 등 사람 단위 개념이 있어 전용 코드가 필요한)
+  // 고정 항목들 — group으로 "필수 3개/제안" 분류(2026-09-10 사용자 확인).
+  // perPerson: 인력 1명당 1건씩 반복 생성되는 서류 — 이 항목만 "인력만큼/하나만" 드롭박스
+  // 기본값이 "인력만큼"이다(2026-09-10 사용자 확인). 지금은 드롭박스 선택 상태만 UI에
+  // 보관 — 실제 생성 로직에는 "정렬 기준: 인력별"에서만 연결됨.
+  var STATIC_ITEM_CATALOG = [
     { id: 'schedule',      label: '감리원 일정 현황표',        typeKey: 'schedule',      templateMenuCode: 'ATT_SCHEDULE',    group: 'core' },
     { id: 'career',        label: '투입 감리원별 실적 및 경력', typeKey: 'career',        templateMenuCode: 'ATT_CAREER',      group: 'core', perPerson: true },
     { id: 'consent',       label: '비상근 감리원 참여 동의서',  typeKey: 'consent',       templateMenuCode: 'ATT_CONSENT',     group: 'core', perPerson: true },
-    { id: 'financial',     label: '표준재무제표',              typeKey: 'financial',     templateMenuCode: 'ATT_STAMP_NO',    group: 'company' },
-    { id: 'bizreg',        label: '사업자등록증',              typeKey: 'bizreg',        templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
-    { id: 'taxcert',       label: '국세 납세증명서',            typeKey: 'taxcert',       templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
-    { id: 'localtaxcert',  label: '지방세 납세증명서',          typeKey: 'localtaxcert',  templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
-    { id: 'corpregistry',  label: '법인등기부등본',             typeKey: 'corpregistry',  templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true, corpRegistry: true },
-    { id: 'insurance',     label: '4대보험 가입확인서',         typeKey: 'insurance',     templateMenuCode: 'ATT_STAMP_YES',   group: 'company', stamp: true },
     { id: 'employmentCert', label: '재직증명서',                typeKey: 'employmentCert', templateMenuCode: 'ATT_EMPLOYMENT',  group: 'proposal', perPerson: true },
     { id: 'careerCert',     label: '경력증명서',                 typeKey: 'careerCert',     templateMenuCode: 'ATT_CAREER_CERT', group: 'proposal', perPerson: true },
     { id: 'staffingStatus', label: '상근감리원인력현황',         typeKey: 'staffingStatus', templateMenuCode: 'ATT_STAFFING',    group: 'proposal' },
   ]
+  var ITEM_CATALOG = STATIC_ITEM_CATALOG.slice()  // openBundleModal()에서 company 그룹을 채워 다시 만든다
   var CORE_IDS = ['schedule', 'career', 'consent']
   var bundleRepeatMode = {}   // { itemId: 'all' | 'one' } — perPerson 항목 전용, 기본값 'all'
   var bundleSortBasis = 'document'  // 'document' | 'personnel' — 최종 결과물 정렬 기준(아직 생성 로직 미연결)
@@ -2433,10 +2428,31 @@ app.get('/ppt-generate', (c) => {
       if (!j.ok) throw new Error(j.error || '항목 조회 실패')
       var allMenus = j.data || []
       bundleMenus = []
+      // "범용 템플릿(도장X/도장O)" 슬롯의 자식 메뉴 = 그 슬롯을 실제로 쓰는 첨부서류들
+      // (PPT 템플릿 관리 → 첨부 → 이미지 치환 탭에서 추가/수정/삭제, 2026-09-10 사용자
+      // 확인). 자식은 자기 템플릿 파일이 없고 부모(공유 슬롯)의 템플릿을 그대로 쓰므로,
+      // findMenuByCode(자식 코드)가 통하도록 부모의 templates를 자식에 그대로 옮겨 붙인다.
+      var companyItems = []
       allMenus.forEach(function(m) {
-        if (m.children && m.children.length) { m.children.forEach(function(c) { bundleMenus.push(c) }) }
-        else { bundleMenus.push(m) }
+        if (m.children && m.children.length) {
+          m.children.forEach(function(c) {
+            c.templates = m.templates
+            bundleMenus.push(c)
+            companyItems.push({
+              id: c.menu_code,
+              label: c.menu_name,
+              typeKey: c.menu_code,
+              templateMenuCode: c.menu_code,
+              group: 'company',
+              stamp: m.menu_code === 'ATT_STAMP_YES',
+              corpRegistry: c.menu_code === 'ATT_CORPREGISTRY',
+            })
+          })
+        } else {
+          bundleMenus.push(m)
+        }
       })
+      ITEM_CATALOG = STATIC_ITEM_CATALOG.concat(companyItems)
       renderBundleItemList()
     } catch(e) {
       listEl.innerHTML = '<div class="text-red-500 text-xs text-center py-4">' + escapeHtml(e.message) + '</div>'
@@ -2507,7 +2523,7 @@ app.get('/ppt-generate', (c) => {
 
   /** 법인등기부등본이 선택돼 있을 때만 말소사항 포함 여부 UI를 보여준다. */
   function updateCorpRegistrySectionVisibility() {
-    var corpNeeded = !!bundleItemChecked['corpregistry']
+    var corpNeeded = !!bundleItemChecked['ATT_CORPREGISTRY']
     document.getElementById('bundleCorpRegistryWrap').classList.toggle('hidden', !corpNeeded)
     if (!corpNeeded) {
       bundleCorpRegistryIncludeCancelled = null
@@ -3170,6 +3186,34 @@ app.get('/ppt-templates', async (c) => {
       </div>
     </div>
 
+    <!-- 이미지 치환 첨부서류 추가/편집 모달 — 이름 + NAS 경로만 입력하면 된다
+         (2026-09-10 사용자 확인 — "이 탭에서 + 누르고 이름과 경로만 입력하면 쓸 수 있도록"). -->
+    <div id="imgSourceModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 class="font-bold text-slate-800" id="imgSourceModalTitle">첨부서류 추가</h3>
+          <button onclick="closeImageSourceModal()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="px-6 py-4 space-y-3">
+          <input type="hidden" id="imgSourceId">
+          <input type="hidden" id="imgSourceParentId">
+          <div>
+            <label class="text-xs text-slate-500 font-medium mb-1 block">표시 이름 <span class="text-red-500">*</span></label>
+            <input id="imgSourceName" type="text" placeholder="예: 고용보험 가입확인서" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500 font-medium mb-1 block">NAS 경로 <span class="text-red-500">*</span></label>
+            <input id="imgSourcePath" type="text" placeholder="예: /activo/04.제안팀/99.악티보포털참조용/01.회사/OO" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300">
+            <p class="text-xs text-slate-400 mt-1">이 폴더 안의 최신 .pptx 또는 .pdf 파일 하나를 자동으로 가져와 씁니다.</p>
+          </div>
+        </div>
+        <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+          <button onclick="closeImageSourceModal()" class="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">취소</button>
+          <button onclick="saveImageSource()" class="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white hover:bg-teal-700">저장</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -3564,6 +3608,13 @@ app.get('/ppt-templates', async (c) => {
     const hasFile = templates.length > 0 && !!templates[0].pptx_b64_key
     const tpl     = templates[0] || null
     const fileName = tpl ? (tpl.pptx_file_path || (tpl.pptx_b64_key ? '업로드됨' : null)) : null
+    const isImageReplace = menu.build_kind === 'IMAGE_REPLACE'
+    // 이 템플릿(도장O/도장X 슬롯)을 실제로 쓰는 첨부서류 목록 — DB의 실제 자식 메뉴
+    // (parent_id로 이 슬롯에 매달린 ppt_menus 행)이라 이름/NAS 경로를 직접 수정하거나
+    // 새로 추가할 수 있고, 바뀐 값은 다음 생성부터 바로 반영된다(2026-09-10 사용자 확인 —
+    // "이름, 경로 수정이 가능해야 해... 변경 후에 실제 PPT 만드는 모달에서 바로 쓸 수
+    // 있도록", "+ 누르고 이름과 경로만 입력하면 쓸 수 있도록").
+    const imageSources = isImageReplace ? (menu.children || []) : []
 
     document.getElementById('detailPanel').innerHTML = \`
       <div class="p-6 h-full overflow-y-auto">
@@ -3589,7 +3640,60 @@ app.get('/ppt-templates', async (c) => {
           </button>
         </div>
 
-        <!-- 현재 템플릿 상태 -->
+        \${isImageReplace ? \`
+        <!-- 이미지 치환 항목은 템플릿 등록칸 자체는 부수적인 정보라 한 줄로 줄이고,
+             실제로 중요한 "이 템플릿을 쓰는 첨부서류 목록"에 화면을 더 내준다
+             (2026-09-10 사용자 확인 — "템플릿 넣는 탭을 줄이고"). -->
+        <div class="mb-4 flex items-center gap-2 p-2.5 rounded-lg border \${hasFile ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}">
+          <i class="fas \${hasFile ? 'fa-check-circle text-emerald-500' : 'fa-exclamation-circle text-slate-400'} text-sm flex-shrink-0"></i>
+          <span class="text-xs font-medium \${hasFile ? 'text-emerald-700' : 'text-slate-500'} flex-shrink-0">\${hasFile ? '템플릿 등록됨' : '템플릿 없음'}</span>
+          <span class="text-xs text-slate-400 truncate">\${hasFile ? (fileName || '파일 업로드됨') : '아래 버튼으로 .pptx 업로드'}</span>
+          \${hasFile && tpl ? \`
+          <button onclick="deleteAttachmentTemplate(\${tpl.id}, \${menu.id})" class="ml-auto text-xs px-2 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-500 border border-red-200 transition flex-shrink-0">
+            <i class="fas fa-trash"></i>
+          </button>
+          \` : ''}
+        </div>
+        <div class="mb-5 flex items-center gap-2">
+          <input id="attNewTplFile" type="file"
+            accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            class="hidden" onchange="onAttTplFileChange(this, \${menu.id})">
+          <button onclick="document.getElementById('attNewTplFile').click()"
+            class="flex-1 py-1.5 text-xs rounded-lg border border-dashed border-teal-300 text-teal-600 hover:bg-teal-50 transition">
+            <i class="fas fa-file-powerpoint mr-1"></i><span id="attTplFileLabel">\${hasFile ? '템플릿 교체 — 클릭해서 .pptx 선택' : '클릭해서 .pptx 선택'}</span>
+          </button>
+          <button id="attTplUploadBtn" onclick="uploadAttachmentTemplate(\${menu.id})"
+            class="py-1.5 px-3 text-xs rounded-lg bg-teal-600 text-white hover:bg-teal-700 font-medium transition disabled:opacity-50 flex-shrink-0"
+            disabled>
+            <i class="fas fa-cloud-upload-alt mr-1"></i>저장
+          </button>
+        </div>
+
+        <!-- 이 템플릿(도장O/도장X 슬롯)을 실제로 쓰는 첨부서류들 — 각 행 클릭하면 이름/NAS
+             경로 편집, +로 새 서류 추가, ×로 삭제(2026-09-10 사용자 확인). -->
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-xs font-bold text-slate-500 uppercase tracking-wide">이 템플릿을 사용하는 첨부서류</div>
+          <button onclick="openAddImageSource(\${menu.id})" class="text-xs px-2 py-0.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-600 border border-teal-200 transition">
+            <i class="fas fa-plus mr-1"></i>추가
+          </button>
+        </div>
+        <div class="space-y-1.5">
+          \${imageSources.length ? imageSources.map(function(s) {
+            return \`
+            <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 hover:border-teal-300 cursor-pointer transition"
+                 onclick="openEditImageSource(\${s.id}, \${menu.id})">
+              <i class="fas fa-image text-slate-400 text-xs flex-shrink-0"></i>
+              <span class="text-xs font-medium text-slate-700 flex-shrink-0">\${s.menu_name}</span>
+              <code class="text-[11px] text-slate-400 truncate ml-auto" title="\${s.nas_path || ''}">\${s.nas_path || '경로 미등록'}</code>
+              <button onclick="event.stopPropagation(); deleteImageSource(\${s.id}, \${menu.id})" class="text-slate-300 hover:text-red-500 flex-shrink-0 px-1">
+                <i class="fas fa-times"></i>
+              </button>
+            </div>
+          \`
+          }).join('') : '<div class="text-xs text-slate-300 px-1">등록된 서류 없음 — 위 "추가" 버튼으로 등록하세요</div>'}
+        </div>
+        \` : \`
+        <!-- 현재 템플릿 상태 (PERSON_PAGES/SHARED_TABLE 등 — 기존 그대로) -->
         <div class="mb-5 p-4 rounded-xl border \${hasFile ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}">
           <div class="flex items-center gap-2">
             <i class="fas \${hasFile ? 'fa-check-circle text-emerald-500' : 'fa-exclamation-circle text-slate-400'} text-lg"></i>
@@ -3637,6 +3741,7 @@ app.get('/ppt-templates', async (c) => {
             <i class="fas fa-cloud-upload-alt mr-1"></i>업로드 & 저장
           </button>
         </div>
+        \`}
 
       </div>
     \`
@@ -3938,6 +4043,75 @@ app.get('/ppt-templates', async (c) => {
       document.getElementById('detailPanel').innerHTML =
         '<div class="flex items-center justify-center h-full text-slate-400"><div class="text-center"><i class="fas fa-mouse-pointer text-4xl mb-3 opacity-30"></i><p class="text-sm">왼쪽 트리에서 메뉴를 선택하세요</p></div></div>'
       loadTree()
+    }
+  }
+
+  // ── 이미지 치환 첨부서류 추가/편집/삭제 — "이 템플릿을 사용하는 첨부서류" 목록
+  // (2026-09-10 사용자 확인 — "이름, 경로 수정이 가능해야 해", "+ 누르고 이름과 경로만
+  // 입력하면 쓸 수 있도록"). ppt_menus의 실제 자식 행이라 기존 메뉴 CRUD API(POST/PUT/
+  // DELETE /api/ppt-menus)를 그대로 쓰되, category/build_kind/parent_id는 여기서 고정
+  // 값으로 채워 보낸다 — 관리자는 이름과 경로만 신경 쓰면 된다. ───────────────────
+  function openAddImageSource(parentId) {
+    document.getElementById('imgSourceModalTitle').textContent = '첨부서류 추가'
+    document.getElementById('imgSourceId').value = ''
+    document.getElementById('imgSourceParentId').value = parentId
+    document.getElementById('imgSourceName').value = ''
+    document.getElementById('imgSourcePath').value = ''
+    document.getElementById('imgSourceModal').classList.remove('hidden')
+  }
+
+  function openEditImageSource(id, parentId) {
+    const parent = findMenuById(_treeData, parentId)
+    const child = parent && parent.children ? parent.children.filter(function(c) { return c.id === id })[0] : null
+    if (!child) return
+    document.getElementById('imgSourceModalTitle').textContent = '첨부서류 편집'
+    document.getElementById('imgSourceId').value = id
+    document.getElementById('imgSourceParentId').value = parentId
+    document.getElementById('imgSourceName').value = child.menu_name
+    document.getElementById('imgSourcePath').value = child.nas_path || ''
+    document.getElementById('imgSourceModal').classList.remove('hidden')
+  }
+
+  function closeImageSourceModal() { document.getElementById('imgSourceModal').classList.add('hidden') }
+
+  async function saveImageSource() {
+    const id = document.getElementById('imgSourceId').value
+    const parentId = document.getElementById('imgSourceParentId').value
+    const name = document.getElementById('imgSourceName').value.trim()
+    const nasPath = document.getElementById('imgSourcePath').value.trim()
+    if (!name || !nasPath) { showAlert('표시 이름과 NAS 경로를 모두 입력해주세요', false); return }
+
+    const body = {
+      parent_id: parseInt(parentId),
+      menu_name: name,
+      nas_path: nasPath,
+      category: 'attachment',
+      build_kind: 'IMAGE_REPLACE',
+    }
+    if (!id) {
+      // 새 항목 — menu_code는 관리자가 신경 쓸 필요 없이 자동 생성(고유하면 됨).
+      body.menu_code = 'ATT_CUSTOM_' + Date.now()
+    }
+    const url = id ? '/api/ppt-menus/' + id : '/api/ppt-menus'
+    const method = id ? 'PUT' : 'POST'
+    const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const j = await r.json()
+    showAlert(j.ok ? '✅ 저장 완료' : '❌ ' + j.error, j.ok)
+    if (j.ok) {
+      closeImageSourceModal()
+      await loadTree()
+      selectMenu(parseInt(parentId))
+    }
+  }
+
+  async function deleteImageSource(id, parentId) {
+    if (!confirm('이 첨부서류를 삭제할까요? (템플릿 파일은 슬롯에 그대로 남아있습니다)')) return
+    const r = await fetch('/api/ppt-menus/' + id, { method: 'DELETE' })
+    const j = await r.json()
+    showAlert(j.ok ? '✅ 삭제 완료' : '❌ ' + j.error, j.ok)
+    if (j.ok) {
+      await loadTree()
+      selectMenu(parentId)
     }
   }
 

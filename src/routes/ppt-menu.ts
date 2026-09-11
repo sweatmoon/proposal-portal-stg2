@@ -258,6 +258,11 @@ app.post('/migrate', async (c) => {
     // 둔다(2026-09-10 사용자 확인 — "템플릿(첨부/서류 항목)도 저 3가지로 가볍게 분류해줘").
     await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS build_kind TEXT`)
 
+    // 12. ppt_menus 에 nas_path 컬럼 추가 — IMAGE_REPLACE 항목이 NAS의 어느 폴더에서 원본
+    // 스캔본/PDF를 가져오는지, 관리자가 "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서
+    // 직접 수정할 수 있는 경로(2026-09-10 사용자 확인 — "이름, 경로 수정이 가능해야 해").
+    await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS nas_path TEXT`)
+
     return c.json({ ok: true, message: 'PPT 테이블 마이그레이션 완료 (8개 테이블 + 컬럼 업그레이드)' })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -768,7 +773,7 @@ app.get('/', async (c) => {
     const menus = await query<{
       id: number; parent_id: number | null; menu_code: string; menu_name: string
       menu_number: string | null; sort_order: number; is_enabled: number; category: string
-      build_kind: string | null
+      build_kind: string | null; nas_path: string | null
     }>(
       cat
         ? `SELECT * FROM ppt_menus WHERE category=$1 ORDER BY sort_order ASC, id ASC`
@@ -847,6 +852,7 @@ app.post('/attachment-seed', async (c) => {
       { code: 'ATT_STAFFING',     name: '상근감리원인력현황',             sort: 80, kind: 'SHARED_TABLE' },
     ]
     const created: string[] = []
+    const idByCode: Record<string, number> = {}
     for (const item of ITEMS) {
       // 1. 메뉴 upsert
       const menu = await queryOne<{ id: number }>(`
@@ -857,6 +863,7 @@ app.post('/attachment-seed', async (c) => {
         RETURNING id
       `, [item.code, item.name, item.sort, item.kind])
       if (!menu) continue
+      idByCode[item.code] = menu.id
       // 2. 빈 템플릿 슬롯 upsert (pptx_b64_key=NULL 인 채로 자리만 만들어 둠)
       await exec(`
         INSERT INTO ppt_templates (menu_id, template_name, variant_code, is_default, is_active)
@@ -866,6 +873,44 @@ app.post('/attachment-seed', async (c) => {
       `, [menu.id, item.name])
       created.push(item.code)
     }
+
+    // "범용 템플릿(도장O/도장X)" 슬롯 하나를 실제로 쓰는 첨부서류들 — 각자 NAS의 어느 경로에서
+    // 원본을 가져오는지(src/lib/nas-client.ts의 경로 상수를 초기값으로 그대로 옮겨 적음).
+    // parent_id로 슬롯에 매달아두면 "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 그 슬롯을
+    // 열었을 때 "이 템플릿을 사용하는 첨부서류" 목록으로 보여줄 수 있고, nas_path/menu_name을
+    // 관리자가 직접 수정하면 실제 생성 로직도 그 값을 그대로 쓴다(2026-09-10 사용자 확인 —
+    // "이름, 경로 수정이 가능해야 해... 변경 후에 실제 PPT 만드는 모달에서 바로 쓸 수 있도록").
+    // 템플릿 파일 자체는 부모 슬롯 것을 공유하므로 이 자식 메뉴들은 자기 ppt_templates가 없다.
+    const CHILD_ITEMS = [
+      { code: 'ATT_FINANCIAL',    name: '표준재무제표',       parentCode: 'ATT_STAMP_NO',
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/18.표준재무제표' },
+      { code: 'ATT_BIZREG',       name: '사업자등록증',       parentCode: 'ATT_STAMP_YES',
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/01.사업자등록증' },
+      { code: 'ATT_TAXCERT',      name: '국세 납세증명서',     parentCode: 'ATT_STAMP_YES',
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/11.국세 납세증명서' },
+      { code: 'ATT_LOCALTAXCERT', name: '지방세 납세증명서',   parentCode: 'ATT_STAMP_YES',
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/12.지방세 납세증명서' },
+      { code: 'ATT_CORPREGISTRY', name: '법인등기부등본',      parentCode: 'ATT_STAMP_YES',
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/07.법인등기부등본' },
+      { code: 'ATT_INSURANCE',    name: '4대보험 가입확인서',  parentCode: 'ATT_STAMP_YES',
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/14.4대 사회보험 사업장 가입자명부' },
+    ]
+    for (let i = 0; i < CHILD_ITEMS.length; i++) {
+      const child = CHILD_ITEMS[i]
+      const parentId = idByCode[child.parentCode]
+      if (!parentId) continue
+      // ON CONFLICT는 menu_code UNIQUE 제약을 그대로 쓴다 — 이미 있으면 이름은 그대로 두고
+      // (관리자가 고쳐뒀을 수 있으니) parent_id/build_kind/category만 맞춰준다. nas_path는
+      // 최초 생성 시에만 기본값을 넣고, 이미 있으면 관리자가 수정한 값을 덮어쓰지 않는다.
+      await exec(`
+        INSERT INTO ppt_menus (menu_code, menu_name, parent_id, sort_order, is_enabled, category, build_kind, nas_path)
+        VALUES ($1, $2, $3, $4, 1, 'attachment', 'IMAGE_REPLACE', $5)
+        ON CONFLICT (menu_code) DO UPDATE
+          SET parent_id=$3, category='attachment', build_kind='IMAGE_REPLACE', updated_at=NOW()
+      `, [child.code, child.name, parentId, (i + 1) * 10, child.nasPath])
+      created.push(child.code)
+    }
+
     return c.json({ ok: true, created })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -916,18 +961,21 @@ app.post('/restore', async (c) => {
 /** POST /api/ppt-menus
  *  category('proposal'|'attachment', 생략 시 기존처럼 컬럼 기본값 'proposal')와 build_kind
  *  (attachment 항목일 때만 의미 있음, attachment-build-kind.ts 참고)를 새로 받는다 —
- *  PPT 템플릿 관리 첨부 탭의 "항목 추가"가 category='attachment'로 호출한다. */
+ *  PPT 템플릿 관리 첨부 탭의 "항목 추가"가 category='attachment'로 호출한다. nas_path는
+ *  build_kind='IMAGE_REPLACE' 항목("이미지 치환" 슬롯 밑의 첨부서류)일 때 그 서류의 NAS
+ *  원본 폴더 경로 — "+"로 새로 추가할 때 이름과 함께 여기로 들어온다(2026-09-10 사용자
+ *  확인 — "이 탭에서 + 누르고 이름과 경로만 입력하면 쓸 수 있도록"). */
 app.post('/', async (c) => {
   try {
     const body = await c.req.json()
-    const { parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind } = body
+    const { parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind, nas_path } = body
     if (build_kind != null && !isAttachmentBuildKind(build_kind)) {
       return c.json({ ok: false, error: `알 수 없는 build_kind: ${build_kind}` }, 400)
     }
     const row = await queryOne<{ id: number }>(`
-      INSERT INTO ppt_menus (parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind)
-      VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7,'proposal'), $8) RETURNING id
-    `, [parent_id ?? null, menu_code, menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, category ?? null, build_kind ?? null])
+      INSERT INTO ppt_menus (parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind, nas_path)
+      VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7,'proposal'), $8, $9) RETURNING id
+    `, [parent_id ?? null, menu_code, menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, category ?? null, build_kind ?? null, nas_path ?? null])
     return c.json({ ok: true, id: row?.id })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -936,21 +984,24 @@ app.post('/', async (c) => {
 })
 
 /** PUT /api/ppt-menus/:id
- *  build_kind도 갱신 가능(생략하면 기존 값 유지) — 첨부 탭에서 항목의 분류를 바꿀 때 씀. */
+ *  build_kind/nas_path도 갱신 가능(생략하면 기존 값 유지) — 첨부 탭에서 항목의 분류를
+ *  바꾸거나, "이미지 치환" 첨부서류의 이름/NAS 경로를 수정할 때 씀(2026-09-10 사용자
+ *  확인 — "이름, 경로 수정이 가능해야 해"). */
 app.put('/:id', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const body = await c.req.json()
-    const { menu_name, menu_number, sort_order, is_enabled, parent_id, build_kind } = body
+    const { menu_name, menu_number, sort_order, is_enabled, parent_id, build_kind, nas_path } = body
     if (build_kind !== undefined && build_kind !== null && !isAttachmentBuildKind(build_kind)) {
       return c.json({ ok: false, error: `알 수 없는 build_kind: ${build_kind}` }, 400)
     }
     await exec(`
       UPDATE ppt_menus
       SET menu_name=$1, menu_number=$2, sort_order=$3, is_enabled=$4, parent_id=$5,
-          build_kind=COALESCE($6, build_kind), updated_at=NOW()
+          build_kind=COALESCE($6, build_kind), nas_path=COALESCE($8, nas_path),
+          updated_at=NOW()
       WHERE id=$7
-    `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, build_kind ?? null, id])
+    `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, build_kind ?? null, id, nas_path || null])
     return c.json({ ok: true })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

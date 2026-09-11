@@ -30,7 +30,8 @@ import { queryOne } from '../db/client.js'
 import { applyPlaceholderMap } from '../lib/pptx-runtext.js'
 import { buildMultiSlideDeck } from '../lib/pptx-deck.js'
 import { findPlaceholderImageTarget, replaceSlideImages } from '../lib/pptx-image-swap.js'
-import { fetchStandardFinancialStatementPptx } from '../lib/nas-client.js'
+import { fetchStandardFinancialStatementPptx, fetchLatestPptxOrPdfFromFolder } from '../lib/nas-client.js'
+import { pdfAllPagesToPng } from '../lib/pdf-render.js'
 
 const app = new Hono()
 
@@ -68,11 +69,16 @@ async function extractPageImages(sourcePptx: Buffer): Promise<Buffer[]> {
 
 /** 이 파일의 핵심 로직 — 단독 다운로드 라우트와 첨부 묶음 라우트 양쪽에서 호출한다.
  *  titlePrefix: 첨부PPT 묶음에서 이 항목이 몇 번째로 선택됐는지("4. " 등)를 제목 앞에 붙인다
- *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다). */
+ *  (단독 다운로드일 때는 생략되어 빈 문자열 — 기존과 동일하게 번호 없이 나온다).
+ *  override: "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 이 항목의 이름/NAS 경로를 바꿔
+ *  등록해뒀으면 그 값을 쓴다(2026-09-10 사용자 확인 — "이름, 경로 수정이 가능해야 해...
+ *  변경 후에 실제 PPT 만드는 모달에서 바로 쓸 수 있도록"). 넘기지 않으면(단독 다운로드 등
+ *  기존 호출) 지금까지처럼 하드코딩된 NAS 경로를 그대로 쓴다. */
 export async function buildFinancialStatementZip(
   templateBuf: Buffer,
   projectId: number,
-  titlePrefix = ''
+  titlePrefix = '',
+  override?: { label?: string; nasPath?: string }
 ): Promise<FinancialStatementZipResult> {
   const project = await queryOne<{ project_name: string }>(
     `SELECT project_name FROM audit_projects WHERE id = $1`,
@@ -80,14 +86,21 @@ export async function buildFinancialStatementZip(
   )
   if (!project) throw new Error('사업을 찾을 수 없습니다')
 
-  const sourcePptx = await fetchStandardFinancialStatementPptx()
-  if (!sourcePptx) throw new Error('NAS에서 표준재무제표 원본 파일을 가져오지 못했습니다')
-
-  const pageImages = await extractPageImages(sourcePptx)
-  if (!pageImages.length) throw new Error('표준재무제표 원본 파일에서 이미지를 찾지 못했습니다')
+  const label = override?.label || PAGE_TITLE
+  let pageImages: Buffer[]
+  if (override?.nasPath) {
+    const sourceFile = await fetchLatestPptxOrPdfFromFolder(override.nasPath, label)
+    if (!sourceFile) throw new Error(`NAS에서 ${label} 원본 파일을 가져오지 못했습니다`)
+    pageImages = sourceFile.isPdf ? await pdfAllPagesToPng(sourceFile.buf) : await extractPageImages(sourceFile.buf)
+  } else {
+    const sourcePptx = await fetchStandardFinancialStatementPptx()
+    if (!sourcePptx) throw new Error('NAS에서 표준재무제표 원본 파일을 가져오지 못했습니다')
+    pageImages = await extractPageImages(sourcePptx)
+  }
+  if (!pageImages.length) throw new Error(`${label} 원본 파일에서 이미지를 찾지 못했습니다`)
 
   const commonMap: Record<string, string> = {
-    '[제목]': `${titlePrefix}${PAGE_TITLE}`,
+    '[제목]': `${titlePrefix}${label}`,
     '[감리사업명]': project.project_name,
   }
 

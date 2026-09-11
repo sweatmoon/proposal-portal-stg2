@@ -17,7 +17,8 @@ import type JSZip from 'jszip'
 import { queryOne } from '../db/client.js'
 import { pdfAllPagesToPng } from '../lib/pdf-render.js'
 import { buildStampedDeckZip } from '../lib/pptx-stamped-doc.js'
-import { fetchInsuranceEnrollmentPdf, fetchCompanyStampPng, type CompanyStampType } from '../lib/nas-client.js'
+import { fetchInsuranceEnrollmentPdf, fetchCompanyStampPng, fetchLatestPptxOrPdfFromFolder, type CompanyStampType } from '../lib/nas-client.js'
+import { extractAllImagesFromPptx } from '../lib/pptx-image-swap.js'
 
 const app = new Hono()
 
@@ -29,11 +30,14 @@ export interface InsuranceEnrollmentZipResult {
   projectName: string
 }
 
+/** override: "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 이름/NAS 경로를 바꿔 등록해뒀으면
+ *  그 값을 쓴다(2026-09-10 사용자 확인). 넘기지 않으면 기존 하드코딩 경로를 그대로 쓴다. */
 export async function buildInsuranceEnrollmentZip(
   templateBuf: Buffer,
   projectId: number,
   stampType: CompanyStampType,
-  titlePrefix = ''
+  titlePrefix = '',
+  override?: { label?: string; nasPath?: string }
 ): Promise<InsuranceEnrollmentZipResult> {
   const project = await queryOne<{ project_name: string }>(
     `SELECT project_name FROM audit_projects WHERE id = $1`,
@@ -41,16 +45,17 @@ export async function buildInsuranceEnrollmentZip(
   )
   if (!project) throw new Error('사업을 찾을 수 없습니다')
 
-  const [sourcePdf, stampPng] = await Promise.all([
-    fetchInsuranceEnrollmentPdf(),
+  const label = override?.label || PAGE_TITLE
+  const [sourceFile, stampPng] = await Promise.all([
+    override?.nasPath ? fetchLatestPptxOrPdfFromFolder(override.nasPath, label) : fetchInsuranceEnrollmentPdf().then(buf => buf ? { buf, isPdf: true } : null),
     fetchCompanyStampPng(stampType),
   ])
-  if (!sourcePdf) throw new Error('NAS에서 4대보험 가입확인서 원본 파일을 가져오지 못했습니다')
+  if (!sourceFile) throw new Error(`NAS에서 ${label} 원본 파일을 가져오지 못했습니다`)
 
-  const bigImages = await pdfAllPagesToPng(sourcePdf)
+  const bigImages = sourceFile.isPdf ? await pdfAllPagesToPng(sourceFile.buf) : await extractAllImagesFromPptx(sourceFile.buf)
 
   const commonMap: Record<string, string> = {
-    '[제목]': `${titlePrefix}${PAGE_TITLE}`,
+    '[제목]': `${titlePrefix}${label}`,
     '[감리사업명]': project.project_name,
   }
 
