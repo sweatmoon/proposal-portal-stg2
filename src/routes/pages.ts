@@ -2085,20 +2085,9 @@ app.get('/ppt-generate', (c) => {
             </div>
           </div>
 
-          <!-- 법인등기부등본 선택 시에만 나타나는 말소사항 포함 여부 -->
-          <div id="bundleCorpRegistryWrap" class="hidden px-4 py-3 bg-sky-50 border-t border-sky-100 flex-shrink-0">
-            <div class="text-xs font-bold text-sky-700 mb-2">법인등기부등본 말소사항 포함 여부</div>
-            <div class="flex gap-4 text-sm text-slate-700">
-              <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="bundleCorpRegistryCancelled" value="true" class="accent-sky-600" onchange="onCorpRegistryCancelledChange(this.value)">
-                말소사항포함
-              </label>
-              <label class="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="bundleCorpRegistryCancelled" value="false" class="accent-sky-600" onchange="onCorpRegistryCancelledChange(this.value)">
-                말소사항미포함
-              </label>
-            </div>
-          </div>
+          <!-- 법인등기부등본의 "말소사항 포함/미포함"은 이제 전용 UI가 아니라, 아래
+               #bundleVariantWrap의 범용 옵션 라디오(variant_options)로 나온다
+               (2026-09-11 사용자 확인 — "동일하게 첨부가 만들어지길"). -->
 
           <!-- "+"로 등록한 첨부서류가 선택 옵션(variant_options)을 가지고 있으면 여기에
                항목별로 라디오가 자동으로 생긴다 — 법인등기부등본의 "말소사항 포함/미포함"을
@@ -2218,8 +2207,7 @@ app.get('/ppt-generate', (c) => {
   var bundleMenus     = []
   var bundleItemChecked = {}          // { catalogId: true/false } — ITEM_CATALOG의 id 기준
   var bundleStampType = null          // '원본대조필' | '사실과상위없음' | null
-  var bundleCorpRegistryIncludeCancelled = null  // 'true' | 'false' | null
-  var bundleVariantChoice = {}  // { itemId: '옵션 인덱스(문자열)' } — variantOptions가 있는 항목 전용
+  var bundleVariantChoice = {}  // { itemId: '옵션 인덱스(문자열)' } — variantOptions가 있는 항목 전용(법인등기부등본의 말소사항 포함/미포함 포함)
 
   // 실제 첨부 문서 종류 카탈로그. "회사"(company) 그룹은 이제 고정 배열이 아니라 DB(ppt_menus)
   // 에서 "범용 템플릿(도장X/도장O)" 슬롯의 자식 메뉴로 동적으로 읽어온다(2026-09-10 사용자
@@ -2404,7 +2392,6 @@ app.get('/ppt-generate', (c) => {
     CORE_IDS.forEach(function(cid) { bundleItemChecked[cid] = true })
     bundleMenus = []
     bundleStampType = null
-    bundleCorpRegistryIncludeCancelled = null
     bundleVariantChoice = {}
     bundleRepeatMode = {}
     bundleSortBasis = 'document'
@@ -2414,8 +2401,6 @@ app.get('/ppt-generate', (c) => {
     document.getElementById('bundleModal').classList.remove('hidden')
     document.getElementById('bundleStampWrap').classList.add('hidden')
     document.querySelectorAll('input[name="bundleStamp"]').forEach(function(el) { el.checked = false })
-    document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
-    document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
     document.getElementById('bundleVariantWrap').innerHTML = ''
     document.querySelectorAll('input[name="bundleSortBasis"]').forEach(function(el) { el.checked = (el.value === 'document') })
     // 키워드 행 초기화 — "② 인력 선택/③ 키워드 변환" UI는 아직 이 모달에 마크업이 없고
@@ -2456,7 +2441,6 @@ app.get('/ppt-generate', (c) => {
               templateMenuCode: c.menu_code,
               group: 'company',
               stamp: m.menu_code === 'ATT_STAMP_YES',
-              corpRegistry: c.menu_code === 'ATT_CORPREGISTRY',
               variantOptions: variantOptions,
             })
           })
@@ -2533,16 +2517,6 @@ app.get('/ppt-generate', (c) => {
     }
   }
 
-  /** 법인등기부등본이 선택돼 있을 때만 말소사항 포함 여부 UI를 보여준다. */
-  function updateCorpRegistrySectionVisibility() {
-    var corpNeeded = !!bundleItemChecked['ATT_CORPREGISTRY']
-    document.getElementById('bundleCorpRegistryWrap').classList.toggle('hidden', !corpNeeded)
-    if (!corpNeeded) {
-      bundleCorpRegistryIncludeCancelled = null
-      document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
-    }
-  }
-
   /** 체크된 항목 중 variantOptions(2개 이상)가 있는 것마다 라디오 그룹을 하나씩 그린다 —
    *  법인등기부등본의 "말소사항 포함/미포함"을 "+"로 등록한 모든 항목에 일반화한 것
    *  (2026-09-10 사용자 확인 — "특수 필터/조건... 저걸로 모든걸 해결 가능하게 만들어야해"). */
@@ -2579,16 +2553,11 @@ app.get('/ppt-generate', (c) => {
     bundleItemChecked[id] = checked
     renderBundleItemList()
     updateStampSectionVisibility()
-    updateCorpRegistrySectionVisibility()
     renderVariantWraps()
   }
 
   function onStampChange(value) {
     bundleStampType = value
-  }
-
-  function onCorpRegistryCancelledChange(value) {
-    bundleCorpRegistryIncludeCancelled = value
   }
 
   function onRepeatModeChange(id, value) {
@@ -2727,11 +2696,9 @@ app.get('/ppt-generate', (c) => {
 
     var stampNeeded = order.some(function(o) { return o.catalog.stamp })
     if (stampNeeded && !bundleStampType) { alert('찍을 도장(원본대조필/사실과상위없음)을 선택해주세요.'); return }
-    var corpNeeded = order.some(function(o) { return o.catalog.corpRegistry })
-    if (corpNeeded && bundleCorpRegistryIncludeCancelled === null) { alert('법인등기부등본의 말소사항 포함 여부를 선택해주세요.'); return }
 
-    // "+"로 등록한 항목 중 옵션(variant_options)이 있는 것들은 전부 선택돼 있어야 한다
-    // (2026-09-10 사용자 확인 — 법인등기부등본류 특수 필터의 일반화).
+    // 옵션(variant_options)이 있는 항목(법인등기부등본의 "말소사항 포함/미포함" 포함,
+    // 2026-09-11 사용자 확인 — 전용 UI 대신 이 범용 메커니즘으로 통일)은 전부 선택돼 있어야 한다.
     var variantItemsNeeded = order.filter(function(o) { return o.catalog.variantOptions && o.catalog.variantOptions.length >= 2 })
     var variantMissing = variantItemsNeeded.filter(function(o) { return bundleVariantChoice[o.catalog.id] === undefined })
     if (variantMissing.length) {
@@ -2749,7 +2716,6 @@ app.get('/ppt-generate', (c) => {
       fd.append('cover', b64ToFile(coverMenu.templates[0].pptx_b64_key, 'cover.pptx'))
       fd.append('order', JSON.stringify(order.map(function(o) { return o.key })))
       if (stampNeeded) fd.append('stampType', bundleStampType)
-      if (corpNeeded) fd.append('corpRegistryIncludeCancelled', bundleCorpRegistryIncludeCancelled)
       variantItemsNeeded.forEach(function(o) { fd.append('variant_' + o.key, bundleVariantChoice[o.catalog.id]) })
 
       // 정렬 기준 + 항목별 인력만큼/하나만 — 서버는 repeatMode를 sortBasis가 '인력별'일 때만

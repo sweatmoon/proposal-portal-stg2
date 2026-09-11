@@ -41,7 +41,8 @@ export async function buildGenericImageReplaceZip(
   nasPath: string,
   stampType: CompanyStampType | null,
   titlePrefix = '',
-  filenamePredicate?: (name: string) => boolean
+  filenamePredicate?: (name: string) => boolean,
+  variantLabel?: string
 ): Promise<GenericImageReplaceZipResult> {
   const project = await queryOne<{ project_name: string }>(
     `SELECT project_name FROM audit_projects WHERE id = $1`,
@@ -63,7 +64,7 @@ export async function buildGenericImageReplaceZip(
   if (!bigImages.length) throw new Error(`"${label}" 원본 파일에서 이미지를 찾지 못했습니다`)
 
   const commonMap: Record<string, string> = {
-    '[제목]': `${titlePrefix}${label}`,
+    '[제목]': `${titlePrefix}${label}${variantLabel ? `(${variantLabel})` : ''}`,
     '[감리사업명]': project.project_name,
   }
 

@@ -899,23 +899,32 @@ app.post('/attachment-seed', async (c) => {
       { code: 'ATT_LOCALTAXCERT', name: '지방세 납세증명서',   parentCode: 'ATT_STAMP_YES',
         nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/12.지방세 납세증명서' },
       { code: 'ATT_CORPREGISTRY', name: '법인등기부등본',      parentCode: 'ATT_STAMP_YES',
-        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/07.법인등기부등본' },
+        nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/07.법인등기부등본',
+        // "말소사항 포함/미포함" — 예전엔 이 항목 하나만을 위한 전용 UI/코드(corpRegistryIncludeCancelled)
+        // 였는데, "+"로 추가한 항목도 쓸 수 있는 범용 variant_options로 통일했다(2026-09-11
+        // 사용자 확인 — "각 템플릿에 변수명 추가하라고 한건... 동일하게 첨부가 만들어지길").
+        variantOptions: [
+          { label: '말소사항포함', includes: '말소사항포함' },
+          { label: '말소사항미포함', excludes: '말소사항포함' },
+        ] },
       { code: 'ATT_INSURANCE',    name: '4대보험 가입확인서',  parentCode: 'ATT_STAMP_YES',
         nasPath: '/activo/04.제안팀/99.악티보포털참조용/01.회사/14.4대 사회보험 사업장 가입자명부' },
     ]
     for (let i = 0; i < CHILD_ITEMS.length; i++) {
-      const child = CHILD_ITEMS[i]
+      const child = CHILD_ITEMS[i] as typeof CHILD_ITEMS[number] & { variantOptions?: unknown[] }
       const parentId = idByCode[child.parentCode]
       if (!parentId) continue
       // ON CONFLICT는 menu_code UNIQUE 제약을 그대로 쓴다 — 이미 있으면 이름은 그대로 두고
-      // (관리자가 고쳐뒀을 수 있으니) parent_id/build_kind/category만 맞춰준다. nas_path는
-      // 최초 생성 시에만 기본값을 넣고, 이미 있으면 관리자가 수정한 값을 덮어쓰지 않는다.
+      // (관리자가 고쳐뒀을 수 있으니) parent_id/build_kind/category만 맞춰준다. nas_path/
+      // variant_options는 최초 생성 시에만 기본값을 넣고, 이미 있으면 관리자가 수정한 값을
+      // 덮어쓰지 않는다.
+      const variantOptionsJson = child.variantOptions && child.variantOptions.length ? JSON.stringify(child.variantOptions) : null
       await exec(`
-        INSERT INTO ppt_menus (menu_code, menu_name, parent_id, sort_order, is_enabled, category, build_kind, nas_path)
-        VALUES ($1, $2, $3, $4, 1, 'attachment', 'IMAGE_REPLACE', $5)
+        INSERT INTO ppt_menus (menu_code, menu_name, parent_id, sort_order, is_enabled, category, build_kind, nas_path, variant_options)
+        VALUES ($1, $2, $3, $4, 1, 'attachment', 'IMAGE_REPLACE', $5, $6)
         ON CONFLICT (menu_code) DO UPDATE
           SET parent_id=$3, category='attachment', build_kind='IMAGE_REPLACE', updated_at=NOW()
-      `, [child.code, child.name, parentId, (i + 1) * 10, child.nasPath])
+      `, [child.code, child.name, parentId, (i + 1) * 10, child.nasPath, variantOptionsJson])
       created.push(child.code)
     }
 

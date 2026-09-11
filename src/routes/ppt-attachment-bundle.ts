@@ -16,14 +16,18 @@
  *     src/routes/ppt-schedule.ts               1. 감리원 일정 현황표
  *     src/routes/ppt-career.ts                 2. 투입 감리원별 실적 및 경력
  *     src/routes/ppt-consent.ts                3. 비상근 감리원 참여 동의서
- *     src/routes/ppt-financial-statement.ts    4. 표준재무제표 (NAS의 회사 표준재무제표 원본을
- *                                               페이지별 이미지로 뽑아 범용 템플릿에 붙여넣음)
- *     src/routes/ppt-business-registration.ts  5. 사업자등록증 ("범용 템플릿(도장O)" — 슬라이드
- *     src/routes/ppt-tax-certificate.ts        6. 국세 납세증명서    1장에 큰 자리=NAS 스캔본/
- *     src/routes/ppt-local-tax-certificate.ts  7. 지방세 납세증명서  PDF 첫 페이지, 작은 자리=
- *     src/routes/ppt-corporate-registry.ts     8. 법인등기부등본     사용자가 고른 도장. 이
- *                                               4개 항목이 템플릿 파일 하나(범용 템플릿
- *                                               (도장O))를 공유한다 — 2026-09-03 사용자 확인)
+ *   [IMAGE_REPLACE 6종 — 2026-09-11부터 이 묶음 생성 흐름에서는 각자 파일 대신
+ *    resolveDynamicAttachmentType() + src/lib/generic-image-replace-doc.ts 하나로 통일해서
+ *    처리한다(사용자 확인 — "해당 함수 및 모듈을 통해서 동일하게 첨부가 만들어지길").
+ *    이름/NAS 경로/옵션(말소사항 등)은 ppt_menus(category=attachment, build_kind=
+ *    IMAGE_REPLACE)에 저장되고, "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 관리한다.
+ *    아래 6개 파일은 각자의 단독 다운로드 라우트(예: POST /api/ppt-business-registration/
+ *    :id)로만 남아있고, 이 묶음 생성 흐름에서는 더 이상 import하지 않는다]
+ *     src/routes/ppt-financial-statement.ts    표준재무제표 (단독 다운로드 전용)
+ *     src/routes/ppt-business-registration.ts  사업자등록증 (단독 다운로드 전용)
+ *     src/routes/ppt-tax-certificate.ts        국세 납세증명서 (단독 다운로드 전용)
+ *     src/routes/ppt-local-tax-certificate.ts  지방세 납세증명서 (단독 다운로드 전용)
+ *     src/routes/ppt-corporate-registry.ts     법인등기부등본 (단독 다운로드 전용)
  *   공용 OOXML 조립 유틸 (위 라우트들이 나눠서 사용)
  *     src/lib/pptx-runtext.ts                  [placeholder] 텍스트 치환 (런 분산 대응)
  *     src/lib/pptx-table-rows.ts               일정표류 표 동적 확장(rowSpan/vMerge, 페이지 분할)
@@ -79,12 +83,6 @@ import { buildGenericImageReplaceZip } from '../lib/generic-image-replace-doc.js
 import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip, type FreeCareerOptions } from './ppt-career.js'
 import { buildConsentZip } from './ppt-consent.js'
-import { buildFinancialStatementZip } from './ppt-financial-statement.js'
-import { buildBusinessRegistrationZip } from './ppt-business-registration.js'
-import { buildTaxCertificateZip } from './ppt-tax-certificate.js'
-import { buildLocalTaxCertificateZip } from './ppt-local-tax-certificate.js'
-import { buildCorporateRegistryZip } from './ppt-corporate-registry.js'
-import { buildInsuranceEnrollmentZip } from './ppt-insurance-enrollment.js'
 import { buildEmploymentCertificateZip } from './ppt-employment-certificate.js'
 import { buildCareerCertificateZip } from './ppt-career-certificate.js'
 import { buildStaffingStatusZip } from './ppt-staffing-status.js'
@@ -104,20 +102,6 @@ function validateStampType(form: FormData): CompanyStampType {
   return stampType
 }
 
-/** IMAGE_REPLACE 항목(표준재무제표/사업자등록증/납세증명서류/법인등기부등본/4대보험)의
- *  이름/NAS 경로는 "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 관리자가 직접 수정할 수
- *  있다(2026-09-10 사용자 확인 — "이름, 경로 수정이 가능해야 해... 변경 후에 실제 PPT
- *  만드는 모달에서 바로 쓸 수 있도록"). 그 값을 매 생성 시점에 DB에서 그대로 읽어와
- *  각 항목의 build*Zip에 override로 넘긴다 — 코드 재배포 없이 수정이 즉시 반영된다. */
-async function resolveImageReplaceOverride(menuCode: string): Promise<{ label?: string; nasPath?: string } | undefined> {
-  const row = await queryOne<{ menu_name: string; nas_path: string | null }>(
-    `SELECT menu_name, nas_path FROM ppt_menus WHERE menu_code = $1`,
-    [menuCode]
-  )
-  if (!row) return undefined
-  return { label: row.menu_name, nasPath: row.nas_path || undefined }
-}
-
 /** 첨부 항목 레지스트리 — 나중에 새 첨부가 생기면 여기에 한 줄만 추가하면 된다.
  *  build()의 titlePrefix는 이 항목이 선택된 순서에서 몇 번째인지("1. " 등)이며, 각 항목의
  *  실제 슬라이드 제목([제목] 자리)에 그대로 반영된다 — 표지 목차 번호와 맞춰서.
@@ -131,13 +115,26 @@ async function resolveImageReplaceOverride(menuCode: string): Promise<{ label?: 
  *  이 인자를 무시하고 항상 사업 전체 기준 동일한 내용을 만든다 — "인력만큼"으로 설정돼도
  *  그 결과를 사람마다 그대로 재사용해서 묶는다(자세한 건 buildSectionsByPersonnel 참고). */
 /**
- * ATTACHMENT_TYPES에 없는 id(= "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 "+"로 새로
- * 등록한 첨부서류)를 만나면 DB에서 그 메뉴를 찾아 즉석에서 항목 정의를 만든다(2026-09-10
- * 사용자 확인 — "이 탭에서 + 누르고 이름과 경로만 입력하면 쓸 수 있도록"). build_kind가
- * IMAGE_REPLACE이고, 부모가 "범용 템플릿(도장O)"(ATT_STAMP_YES) 또는 "범용 템플릿(도장X)"
- * (ATT_STAMP_NO)일 때만 유효하다 — 도장O 밑이면 stampType을 받아 도장까지 찍고, 도장X
- * 밑이면 도장 없이 이미지만 끼워넣는다(자세한 조립은 generic-image-replace-doc.ts 참고).
- * 못 찾거나 조건에 안 맞으면 undefined(호출 쪽에서 "알 수 없는 첨부 항목" 처리).
+ * IMAGE_REPLACE 항목(표준재무제표/사업자등록증/국세·지방세 납세증명서/법인등기부등본/
+ * 4대보험 — "PPT 템플릿 관리 → 첨부 → 이미지 치환" 탭에서 "+"로 새로 등록한 것 포함
+ * 전부)은 이 함수 하나로 DB에서 그 메뉴를 찾아 즉석에서 항목 정의를 만든다. 예전에는
+ * 이 6개가 각자 파일(ppt-business-registration.ts 등)에 따로 build*Zip을 갖고 있었지만,
+ * "이름/경로만 다를 뿐 만드는 방식은 3가지(attachment-build-kind.ts)로 나뉜다"는 걸
+ * 확인한 뒤로는 전부 이 함수(와 generic-image-replace-doc.ts)를 거치도록 통일했다
+ * (2026-09-11 사용자 확인 — "각 템플릿에 변수명 추가하라고 한건... 해당 함수 및 모듈을
+ * 통해서 동일하게 첨부가 만들어지길 바라는 거야"). 그 6개 파일은 단독 다운로드 라우트
+ * (예: POST /api/ppt-business-registration/:id)용으로만 남아있고 이 묶음 생성 흐름에서는
+ * 더 이상 쓰지 않는다.
+ *
+ * build_kind가 IMAGE_REPLACE이고, 부모가 "범용 템플릿(도장O)"(ATT_STAMP_YES) 또는
+ * "범용 템플릿(도장X)"(ATT_STAMP_NO)일 때만 유효하다 — 도장O 밑이면 stampType을 받아
+ * 도장까지 찍고, 도장X 밑이면 도장 없이 이미지만 끼워넣는다. 못 찾거나 조건에 안 맞으면
+ * undefined(호출 쪽에서 "알 수 없는 첨부 항목" 처리).
+ *
+ * variant_options(예: 법인등기부등본의 "말소사항 포함/미포함")가 있으면 사용자가 첨부PPT
+ * 생성 모달에서 고른 인덱스를 "variant_<menuCode>" 필드로 받아, 그 옵션의 includes/
+ * excludes로 파일명 필터를 만들고, 옵션 이름을 슬라이드 제목에도 반영한다(2026-09-10
+ * 사용자 확인 — "특수 필터/조건... 저걸로 모든걸 해결 가능하게 만들어야해").
  */
 interface VariantOption {
   label: string
@@ -170,6 +167,7 @@ async function resolveDynamicAttachmentType(menuCode: string): Promise<Attachmen
       // includes/excludes로 파일명 필터를 만든다(2026-09-10 사용자 확인 — "특수 필터/
       // 조건... 저걸로 모든걸 해결 가능하게 만들어야해").
       let filenamePredicate: ((name: string) => boolean) | undefined
+      let variantLabel: string | undefined
       if (variantOptions.length) {
         const chosenRaw = form.get(`variant_${menuCode}`)
         const chosenIdx = typeof chosenRaw === 'string' ? Number(chosenRaw) : NaN
@@ -177,8 +175,9 @@ async function resolveDynamicAttachmentType(menuCode: string): Promise<Attachmen
         if (!chosen) throw new Error(`"${label}"의 옵션(${variantOptions.map(o => o.label).join('/')})을 선택해주세요`)
         filenamePredicate = (name: string) =>
           (!chosen.includes || name.includes(chosen.includes)) && (!chosen.excludes || !name.includes(chosen.excludes))
+        variantLabel = chosen.label
       }
-      const { zip } = await buildGenericImageReplaceZip(buf, projectId, label, nasPath, stampType, titlePrefix, filenamePredicate)
+      const { zip } = await buildGenericImageReplaceZip(buf, projectId, label, nasPath, stampType, titlePrefix, filenamePredicate, variantLabel)
       return zip
     },
   }
@@ -231,68 +230,6 @@ const ATTACHMENT_TYPES: Record<string, AttachmentTypeDef> = {
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
       const result = await buildConsentZip(buf, projectId, titlePrefix, personnelNameFilter)
       return result ? result.zip : null
-    },
-  },
-  ATT_FINANCIAL: {
-    label: '표준재무제표',
-    buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, _form, titlePrefix) => {
-      const override = await resolveImageReplaceOverride('ATT_FINANCIAL')
-      return (await buildFinancialStatementZip(buf, projectId, titlePrefix, override)).zip
-    },
-  },
-  ATT_BIZREG: {
-    label: '사업자등록증',
-    buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, form, titlePrefix) => {
-      const stampType = validateStampType(form)
-      const override = await resolveImageReplaceOverride('ATT_BIZREG')
-      const { zip } = await buildBusinessRegistrationZip(buf, projectId, stampType, titlePrefix, override)
-      return zip
-    },
-  },
-  ATT_TAXCERT: {
-    label: '국세 납세증명서',
-    buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, form, titlePrefix) => {
-      const stampType = validateStampType(form)
-      const override = await resolveImageReplaceOverride('ATT_TAXCERT')
-      const { zip } = await buildTaxCertificateZip(buf, projectId, stampType, titlePrefix, override)
-      return zip
-    },
-  },
-  ATT_LOCALTAXCERT: {
-    label: '지방세 납세증명서',
-    buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, form, titlePrefix) => {
-      const stampType = validateStampType(form)
-      const override = await resolveImageReplaceOverride('ATT_LOCALTAXCERT')
-      const { zip } = await buildLocalTaxCertificateZip(buf, projectId, stampType, titlePrefix, override)
-      return zip
-    },
-  },
-  ATT_CORPREGISTRY: {
-    label: '법인등기부등본',
-    buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, form, titlePrefix) => {
-      const stampType = validateStampType(form)
-      const includeCancelledRaw = form.get('corpRegistryIncludeCancelled')
-      if (includeCancelledRaw !== 'true' && includeCancelledRaw !== 'false') {
-        throw new Error('법인등기부등본 말소사항 포함 여부를 선택해주세요')
-      }
-      const override = await resolveImageReplaceOverride('ATT_CORPREGISTRY')
-      const { zip } = await buildCorporateRegistryZip(buf, projectId, includeCancelledRaw === 'true', stampType, titlePrefix, override)
-      return zip
-    },
-  },
-  ATT_INSURANCE: {
-    label: '4대보험 가입확인서',
-    buildKind: 'IMAGE_REPLACE',
-    build: async (buf, projectId, form, titlePrefix) => {
-      const stampType = validateStampType(form)
-      const override = await resolveImageReplaceOverride('ATT_INSURANCE')
-      const { zip } = await buildInsuranceEnrollmentZip(buf, projectId, stampType, titlePrefix, override)
-      return zip
     },
   },
   employmentCert: {
