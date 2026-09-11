@@ -3249,6 +3249,50 @@ app.get('/ppt-templates', async (c) => {
       </div>
     </div>
 
+    <!-- 플레이스홀더 값 소스 추가/편집 모달 — DB/엑셀/고정값/도장 이미지 중 값 소스를
+         고르고, 안전한 내장 변환 함수(코드 실행 없음)를 체인으로 붙인다(2026-09-11 사용자
+         확인 — "값 소스마다 db/엑셀/ppt 선택 가능하게"). -->
+    <div id="phSourceModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-xl">
+        <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 class="font-bold text-slate-800" id="phSourceModalTitle">플레이스홀더 매핑 추가</h3>
+          <button onclick="closePhSourceModal()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
+          <input type="hidden" id="phSourceEditKey">
+          <div>
+            <label class="text-xs text-slate-500 font-medium mb-1 block">플레이스홀더 키 <span class="text-red-500">*</span></label>
+            <input id="phSourceKey" type="text" placeholder="예: [이름]" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300">
+            <p class="text-xs text-slate-400 mt-1">템플릿 pptx 안에 있는 자리표시자 그대로(대괄호 포함) 입력하세요.</p>
+          </div>
+          <div>
+            <label class="text-xs text-slate-500 font-medium mb-1.5 block">값 소스</label>
+            <div class="grid grid-cols-4 gap-1.5" id="phSourceTypeButtons">
+              <button type="button" data-type="db" onclick="setPhSourceType('db')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">DB</button>
+              <button type="button" data-type="excel" onclick="setPhSourceType('excel')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">엑셀</button>
+              <button type="button" data-type="fixed" onclick="setPhSourceType('fixed')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">고정값</button>
+              <button type="button" data-type="stamp" onclick="setPhSourceType('stamp')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">도장 이미지</button>
+            </div>
+          </div>
+          <div id="phSourceConfigArea"></div>
+          <div class="pt-2 border-t border-slate-100">
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="text-xs text-slate-500 font-medium">변환 (선택 사항)</label>
+              <button type="button" onclick="addPhTransformRow()" class="text-xs px-2 py-0.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 transition">
+                <i class="fas fa-plus mr-1"></i>변환 추가
+              </button>
+            </div>
+            <p class="text-xs text-slate-400 mb-2">위 값 소스에서 가져온 원본 값을 순서대로 가공합니다(예: 날짜 포맷 변환 → 조사 붙이기). 서버 코드를 직접 실행하는 게 아니라 미리 정의된 안전한 변환만 고를 수 있습니다.</p>
+            <div id="phTransformRows" class="space-y-1.5"></div>
+          </div>
+        </div>
+        <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+          <button onclick="closePhSourceModal()" class="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">취소</button>
+          <button onclick="savePhSource()" class="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white hover:bg-teal-700">저장</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -3644,6 +3688,12 @@ app.get('/ppt-templates', async (c) => {
     const tpl     = templates[0] || null
     const fileName = tpl ? (tpl.pptx_file_path || (tpl.pptx_b64_key ? '업로드됨' : null)) : null
     const isImageReplace = menu.build_kind === 'IMAGE_REPLACE'
+    // 플레이스홀더 치환 항목도 이미지 치환처럼 "PPT 템플릿 관리" 페이지에서 값 소스(DB/
+    // 엑셀/고정값/도장 이미지)와 변환을 직접 설정할 수 있게 한다(2026-09-11 사용자 확인 —
+    // "플레이스홀더 그룹도 이미지 치환처럼 페이지에서 모든걸 통제하게 하고 싶음... 오른쪽에
+    // 치환할 부분을 작성하게 하고 싶음"). 실제 값은 ppt_placeholder_sources 테이블에
+    // 저장되고 src/lib/generic-placeholder-replace-doc.ts가 생성 시 읽는다.
+    const isPlaceholderReplace = menu.build_kind === 'PLACEHOLDER_REPLACE'
     // 이 템플릿(도장O/도장X 슬롯)을 실제로 쓰는 첨부서류 목록 — DB의 실제 자식 메뉴
     // (parent_id로 이 슬롯에 매달린 ppt_menus 행)이라 이름/NAS 경로를 직접 수정하거나
     // 새로 추가할 수 있고, 바뀐 값은 다음 생성부터 바로 반영된다(2026-09-10 사용자 확인 —
@@ -3730,8 +3780,49 @@ app.get('/ppt-templates', async (c) => {
           \`
           }).join('') : '<div class="text-xs text-slate-300 px-1">등록된 서류 없음 — 위 "추가" 버튼으로 등록하세요</div>'}
         </div>
+        \` : isPlaceholderReplace ? \`
+        <!-- 플레이스홀더 치환 항목 — 템플릿 등록칸은 이미지 치환처럼 한 줄로 줄이고,
+             그 아래에 플레이스홀더별 값 소스/변환 매핑을 둔다(2026-09-11 사용자 확인 —
+             "템플릿 등록하라고 뜨는 그 부분을 왼쪽으로 밀고, 오른쪽에 치환할 부분을
+             작성하게 하고 싶음"). 상세 패널 자체 폭이 좁아 좌우 2단보다는 이미지 치환과
+             같은 세로 배치(압축 등록칸 → 목록)가 실제로 더 잘 맞는다. -->
+        <div class="mb-4 flex items-center gap-2 p-2.5 rounded-lg border \${hasFile ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}">
+          <i class="fas \${hasFile ? 'fa-check-circle text-emerald-500' : 'fa-exclamation-circle text-slate-400'} text-sm flex-shrink-0"></i>
+          <span class="text-xs font-medium \${hasFile ? 'text-emerald-700' : 'text-slate-500'} flex-shrink-0">\${hasFile ? '템플릿 등록됨' : '템플릿 없음'}</span>
+          <span class="text-xs text-slate-400 truncate">\${hasFile ? (fileName || '파일 업로드됨') : '아래 버튼으로 .pptx 업로드'}</span>
+          \${hasFile && tpl ? \`
+          <button onclick="deleteAttachmentTemplate(\${tpl.id}, \${menu.id})" class="ml-auto text-xs px-2 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-500 border border-red-200 transition flex-shrink-0">
+            <i class="fas fa-trash"></i>
+          </button>
+          \` : ''}
+        </div>
+        <div class="mb-5 flex items-center gap-2">
+          <input id="attNewTplFile" type="file"
+            accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            class="hidden" onchange="onAttTplFileChange(this, \${menu.id})">
+          <button onclick="document.getElementById('attNewTplFile').click()"
+            class="flex-1 py-1.5 text-xs rounded-lg border border-dashed border-teal-300 text-teal-600 hover:bg-teal-50 transition">
+            <i class="fas fa-file-powerpoint mr-1"></i><span id="attTplFileLabel">\${hasFile ? '템플릿 교체 — 클릭해서 .pptx 선택' : '클릭해서 .pptx 선택'}</span>
+          </button>
+          <button id="attTplUploadBtn" onclick="uploadAttachmentTemplate(\${menu.id})"
+            class="py-1.5 px-3 text-xs rounded-lg bg-teal-600 text-white hover:bg-teal-700 font-medium transition disabled:opacity-50 flex-shrink-0"
+            disabled>
+            <i class="fas fa-cloud-upload-alt mr-1"></i>저장
+          </button>
+        </div>
+
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-xs font-bold text-slate-500 uppercase tracking-wide">플레이스홀더 매핑</div>
+          <button onclick="openAddPhSource()" class="text-xs px-2 py-0.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-600 border border-teal-200 transition">
+            <i class="fas fa-plus mr-1"></i>추가
+          </button>
+        </div>
+        <p class="text-xs text-slate-400 mb-2">템플릿의 [필드명] 자리마다 값을 어디서(DB/엑셀/고정값/도장 이미지) 가져올지 설정합니다.</p>
+        <div id="phSourceList" class="space-y-1.5">
+          <div class="text-xs text-slate-300 px-1">불러오는 중…</div>
+        </div>
         \` : \`
-        <!-- 현재 템플릿 상태 (PLACEHOLDER_REPLACE/MIXED_REPLACE 등 — 기존 그대로) -->
+        <!-- 현재 템플릿 상태 (MIXED_REPLACE 등 — 기존 그대로) -->
         <div class="mb-5 p-4 rounded-xl border \${hasFile ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}">
           <div class="flex items-center gap-2">
             <i class="fas \${hasFile ? 'fa-check-circle text-emerald-500' : 'fa-exclamation-circle text-slate-400'} text-lg"></i>
@@ -3783,6 +3874,8 @@ app.get('/ppt-templates', async (c) => {
 
       </div>
     \`
+
+    if (isPlaceholderReplace) loadPlaceholderSources(menu.id)
   }
 
   // ── 첨부 탭 템플릿 업로드 함수들 ────────────────────────────────
@@ -4194,6 +4287,279 @@ app.get('/ppt-templates', async (c) => {
       await loadTree()
       selectMenu(parentId)
     }
+  }
+
+  // ── 플레이스홀더 치환 — 값 소스/변환 매핑 관리(2026-09-11 사용자 확인 — "플레이스홀더
+  //    그룹도 이미지 치환처럼 페이지에서 모든걸 통제하게 하고 싶음"). 실제 저장은
+  //    src/routes/ppt-menu.ts의 PUT /:id/placeholder-sources(항목 전체를 한 번에
+  //    교체)가 처리하고, 생성 시엔 src/lib/generic-placeholder-replace-doc.ts가 읽는다. ──
+  let _dbFieldOptions = []
+  let _phTransformTypeOptions = []
+  let _phSources = []
+  let _phSourcesMenuId = null
+  let _phSourceType = 'fixed'
+
+  const PH_SOURCE_TYPE_LABELS = { db: 'DB', excel: '엑셀', fixed: '고정값', stamp: '도장 이미지' }
+  const PH_DATE_INPUT_FORMATS = ['YYMMDD_RRN', 'YYMMDD_CMP', 'YYYYMMDD', 'YYYY-MM-DD', 'YYYY.MM.DD']
+  const PH_DATE_OUTPUT_FORMATS = ['YYYY.MM.DD.', 'YYYY.MM.DD', 'YYYY-MM-DD', 'YYYY년 MM월 DD일', 'YYYY년 M월 D일']
+
+  async function ensurePhCatalogsLoaded() {
+    if (!_dbFieldOptions.length) {
+      const r = await fetch('/api/ppt-menus/db-fields')
+      const j = await r.json()
+      if (j.ok) _dbFieldOptions = j.data
+    }
+    if (!_phTransformTypeOptions.length) {
+      const r = await fetch('/api/ppt-menus/transform-types')
+      const j = await r.json()
+      if (j.ok) _phTransformTypeOptions = j.data
+    }
+  }
+
+  async function loadPlaceholderSources(menuId) {
+    _phSourcesMenuId = menuId
+    await ensurePhCatalogsLoaded()
+    const r = await fetch('/api/ppt-menus/' + menuId + '/placeholder-sources')
+    const j = await r.json()
+    _phSources = j.ok ? j.data : []
+    renderPhSourceList()
+  }
+
+  function renderPhSourceList() {
+    const listEl = document.getElementById('phSourceList')
+    if (!listEl) return
+    if (!_phSources.length) {
+      listEl.innerHTML = '<div class="text-xs text-slate-300 px-1">등록된 매핑 없음 — 위 "추가" 버튼으로 등록하세요</div>'
+      return
+    }
+    listEl.innerHTML = _phSources.map(function(s, i) {
+      let cfg = {}
+      try { cfg = s.source_config ? JSON.parse(s.source_config) : {} } catch (e) {}
+      let detail = ''
+      if (s.source_type === 'db') {
+        const f = _dbFieldOptions.filter(function(x) { return x.key === cfg.fieldKey })[0]
+        detail = f ? f.label : (cfg.fieldKey || '')
+      } else if (s.source_type === 'excel') {
+        detail = (cfg.sheet || '') + ' / ' + (cfg.valueColumn || '') + '열'
+      } else if (s.source_type === 'fixed') {
+        detail = cfg.value || ''
+      }
+      let transformCount = 0
+      try { transformCount = s.transforms ? JSON.parse(s.transforms).length : 0 } catch (e) {}
+      return '<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 hover:border-teal-300 cursor-pointer transition" onclick="openEditPhSource(' + i + ')">'
+        + '<code class="text-xs font-mono text-teal-600 flex-shrink-0">' + s.placeholder_key + '</code>'
+        + '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 flex-shrink-0">' + PH_SOURCE_TYPE_LABELS[s.source_type] + '</span>'
+        + (transformCount ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 flex-shrink-0">변환 ' + transformCount + '개</span>' : '')
+        + '<span class="text-[11px] text-slate-400 truncate ml-auto">' + detail + '</span>'
+        + '<button onclick="event.stopPropagation(); deletePhSource(' + i + ')" class="text-slate-300 hover:text-red-500 flex-shrink-0 px-1"><i class="fas fa-times"></i></button>'
+        + '</div>'
+    }).join('')
+  }
+
+  function setPhSourceType(type, cfg) {
+    _phSourceType = type
+    document.querySelectorAll('.ph-type-btn').forEach(function(btn) {
+      const active = btn.dataset.type === type
+      btn.classList.toggle('bg-teal-600', active)
+      btn.classList.toggle('text-white', active)
+      btn.classList.toggle('border-teal-600', active)
+      btn.classList.toggle('bg-white', !active)
+      btn.classList.toggle('text-slate-600', !active)
+      btn.classList.toggle('border-slate-200', !active)
+    })
+    renderPhConfigArea(type, cfg || {})
+  }
+
+  function renderPhConfigArea(type, cfg) {
+    const area = document.getElementById('phSourceConfigArea')
+    if (!area) return
+    if (type === 'db') {
+      const options = _dbFieldOptions.map(function(f) {
+        return '<option value="' + f.key + '"' + (cfg.fieldKey === f.key ? ' selected' : '') + '>' + f.label + '</option>'
+      }).join('')
+      area.innerHTML = '<label class="text-xs text-slate-500 font-medium mb-1 block">DB 필드</label>'
+        + '<select id="phCfgDbField" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">' + options + '</select>'
+    } else if (type === 'excel') {
+      area.innerHTML = ''
+        + '<label class="text-xs text-slate-500 font-medium mb-1 block">NAS 경로(엑셀 파일)</label>'
+        + '<input id="phCfgNasPath" type="text" value="' + (cfg.nasPath || '') + '" placeholder="예: /activo/04.제안팀/99.악티보포털참조용/00.직원정보.xlsx" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono mb-2">'
+        + '<div class="grid grid-cols-3 gap-2">'
+        + '<div><label class="text-xs text-slate-500 font-medium mb-1 block">시트명</label><input id="phCfgSheet" type="text" value="' + (cfg.sheet || '') + '" class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"></div>'
+        + '<div><label class="text-xs text-slate-500 font-medium mb-1 block">이름 열</label><input id="phCfgNameColumn" type="text" value="' + (cfg.nameColumn || '') + '" placeholder="A" class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"></div>'
+        + '<div><label class="text-xs text-slate-500 font-medium mb-1 block">값 열</label><input id="phCfgValueColumn" type="text" value="' + (cfg.valueColumn || '') + '" placeholder="G" class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"></div>'
+        + '</div>'
+        + '<p class="text-xs text-slate-400 mt-1">이 시트에서 이름 열 값이 이 사업 인력의 이름과 같은 행을 찾아, 값 열의 값을 읽어옵니다.</p>'
+    } else if (type === 'fixed') {
+      area.innerHTML = '<label class="text-xs text-slate-500 font-medium mb-1 block">고정 값</label>'
+        + '<input id="phCfgFixedValue" type="text" value="' + (cfg.value || '') + '" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">'
+    } else if (type === 'stamp') {
+      area.innerHTML = '<p class="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">이 인물의 개인 도장 이미지로 템플릿 안의 자리표시자 이미지를 바꿔치기합니다 — 값 입력이 필요 없고, 템플릿에 도장 자리표시자 이미지가 있어야 합니다.</p>'
+    }
+  }
+
+  function addPhTransformRow(prefill) {
+    const container = document.getElementById('phTransformRows')
+    const div = document.createElement('div')
+    div.className = 'ph-transform-row border border-slate-200 rounded-lg p-2'
+    const typeOptions = _phTransformTypeOptions.map(function(t) {
+      return '<option value="' + t.type + '">' + t.label + '</option>'
+    }).join('')
+    div.innerHTML = '<div class="flex items-center gap-1.5 mb-1.5">'
+      + '<select class="tf-type flex-1 text-xs px-2 py-1.5 border border-slate-200 rounded-lg" onchange="onPhTransformTypeChange(this)">' + typeOptions + '</select>'
+      + '<button type="button" onclick="this.closest(&#39;.ph-transform-row&#39;).remove()" class="text-slate-300 hover:text-red-400 text-sm px-1 flex-shrink-0"><i class="fas fa-times"></i></button>'
+      + '</div>'
+      + '<div class="tf-params"></div>'
+    container.appendChild(div)
+    const typeSelect = div.querySelector('.tf-type')
+    if (prefill && prefill.type) typeSelect.value = prefill.type
+    onPhTransformTypeChange(typeSelect, prefill ? prefill.params : null)
+  }
+
+  function onPhTransformTypeChange(selectEl, prefillParams) {
+    const row = selectEl.closest('.ph-transform-row')
+    const paramsEl = row.querySelector('.tf-params')
+    const type = selectEl.value
+    const p = prefillParams || {}
+    if (type === 'dateFormat') {
+      paramsEl.innerHTML = '<div class="grid grid-cols-2 gap-1.5">'
+        + '<select class="tf-p-input text-xs px-2 py-1.5 border border-slate-200 rounded-lg">' + PH_DATE_INPUT_FORMATS.map(function(f) { return '<option' + (p.inputFormat === f ? ' selected' : '') + '>' + f + '</option>' }).join('') + '</select>'
+        + '<select class="tf-p-output text-xs px-2 py-1.5 border border-slate-200 rounded-lg">' + PH_DATE_OUTPUT_FORMATS.map(function(f) { return '<option' + (p.outputFormat === f ? ' selected' : '') + '>' + f + '</option>' }).join('') + '</select>'
+        + '</div>'
+    } else if (type === 'dayOffset') {
+      paramsEl.innerHTML = '<input class="tf-p-days text-xs px-2 py-1.5 border border-slate-200 rounded-lg w-24" type="number" placeholder="예: -1" value="' + (p.days != null ? p.days : '') + '">'
+    } else if (type === 'particle') {
+      paramsEl.innerHTML = '<div class="flex gap-1.5 items-center text-xs text-slate-500">'
+        + '<input class="tf-p-pair0 w-12 text-xs px-2 py-1.5 border border-slate-200 rounded-lg text-center" maxlength="1" placeholder="은" value="' + (p.pair ? (p.pair[0] || '') : '') + '">'
+        + '<span>/</span>'
+        + '<input class="tf-p-pair1 w-12 text-xs px-2 py-1.5 border border-slate-200 rounded-lg text-center" maxlength="1" placeholder="는" value="' + (p.pair ? (p.pair[1] || '') : '') + '">'
+        + '<span>(받침 있음/없음 순서)</span></div>'
+    } else if (type === 'prefix' || type === 'suffix') {
+      paramsEl.innerHTML = '<input class="tf-p-text text-xs px-2 py-1.5 border border-slate-200 rounded-lg w-full" placeholder="붙일 문자" value="' + (p.text || '') + '">'
+    } else if (type === 'lookup') {
+      const pairsStr = p.pairs ? p.pairs.map(function(x) { return x.from + ':' + x.to }).join(', ') : ''
+      paramsEl.innerHTML = '<input class="tf-p-pairs text-xs px-2 py-1.5 border border-slate-200 rounded-lg w-full font-mono" placeholder="원본:바꿀값, 원본2:바꿀값2" value="' + pairsStr + '">'
+    } else {
+      paramsEl.innerHTML = ''
+    }
+  }
+
+  function collectPhTransforms() {
+    const rows = document.querySelectorAll('#phTransformRows .ph-transform-row')
+    const result = []
+    rows.forEach(function(row) {
+      const type = row.querySelector('.tf-type').value
+      let params = {}
+      if (type === 'dateFormat') {
+        params = { inputFormat: row.querySelector('.tf-p-input').value, outputFormat: row.querySelector('.tf-p-output').value }
+      } else if (type === 'dayOffset') {
+        params = { days: Number(row.querySelector('.tf-p-days').value) || 0 }
+      } else if (type === 'particle') {
+        params = { pair: [row.querySelector('.tf-p-pair0').value || '은', row.querySelector('.tf-p-pair1').value || '는'] }
+      } else if (type === 'prefix' || type === 'suffix') {
+        params = { text: row.querySelector('.tf-p-text').value }
+      } else if (type === 'lookup') {
+        const raw = row.querySelector('.tf-p-pairs').value
+        params = {
+          pairs: raw.split(',').map(function(s) { return s.trim() }).filter(Boolean).map(function(s) {
+            const idx = s.indexOf(':')
+            return idx === -1 ? { from: s, to: '' } : { from: s.slice(0, idx).trim(), to: s.slice(idx + 1).trim() }
+          }),
+        }
+      }
+      result.push({ type: type, params: params })
+    })
+    return result
+  }
+
+  async function openAddPhSource() {
+    await ensurePhCatalogsLoaded()
+    document.getElementById('phSourceModalTitle').textContent = '플레이스홀더 매핑 추가'
+    document.getElementById('phSourceEditKey').value = ''
+    document.getElementById('phSourceKey').value = ''
+    document.getElementById('phTransformRows').innerHTML = ''
+    setPhSourceType('fixed')
+    document.getElementById('phSourceModal').classList.remove('hidden')
+  }
+
+  async function openEditPhSource(index) {
+    await ensurePhCatalogsLoaded()
+    const s = _phSources[index]
+    if (!s) return
+    let cfg = {}
+    try { cfg = s.source_config ? JSON.parse(s.source_config) : {} } catch (e) {}
+    let transforms = []
+    try { transforms = s.transforms ? JSON.parse(s.transforms) : [] } catch (e) {}
+    document.getElementById('phSourceModalTitle').textContent = '플레이스홀더 매핑 편집'
+    document.getElementById('phSourceEditKey').value = s.placeholder_key
+    document.getElementById('phSourceKey').value = s.placeholder_key
+    document.getElementById('phTransformRows').innerHTML = ''
+    transforms.forEach(function(t) { addPhTransformRow(t) })
+    setPhSourceType(s.source_type, cfg)
+    document.getElementById('phSourceModal').classList.remove('hidden')
+  }
+
+  function closePhSourceModal() { document.getElementById('phSourceModal').classList.add('hidden') }
+
+  function collectPhConfig(type) {
+    if (type === 'db') {
+      const el = document.getElementById('phCfgDbField')
+      return { fieldKey: el ? el.value : '' }
+    } else if (type === 'excel') {
+      return {
+        nasPath: (document.getElementById('phCfgNasPath') || {}).value || '',
+        sheet: (document.getElementById('phCfgSheet') || {}).value || '',
+        nameColumn: (document.getElementById('phCfgNameColumn') || {}).value || '',
+        valueColumn: (document.getElementById('phCfgValueColumn') || {}).value || '',
+      }
+    } else if (type === 'fixed') {
+      return { value: (document.getElementById('phCfgFixedValue') || {}).value || '' }
+    }
+    return {}
+  }
+
+  async function savePhSource() {
+    const key = document.getElementById('phSourceKey').value.trim()
+    if (!key) { showAlert('플레이스홀더 키를 입력해주세요', false); return }
+    const editKey = document.getElementById('phSourceEditKey').value
+    const config = collectPhConfig(_phSourceType)
+    if (_phSourceType === 'excel' && (!config.nasPath || !config.sheet || !config.nameColumn || !config.valueColumn)) {
+      showAlert('엑셀 소스는 경로/시트/이름 열/값 열을 모두 입력해주세요', false); return
+    }
+    if (_phSourceType === 'db' && !config.fieldKey) { showAlert('DB 필드를 선택해주세요', false); return }
+    const transforms = collectPhTransforms()
+    const next = _phSources
+      .filter(function(s) { return s.placeholder_key !== key && s.placeholder_key !== editKey })
+      .map(function(s) {
+        let cfg = {}, tf = []
+        try { cfg = s.source_config ? JSON.parse(s.source_config) : {} } catch (e) {}
+        try { tf = s.transforms ? JSON.parse(s.transforms) : [] } catch (e) {}
+        return { placeholder_key: s.placeholder_key, source_type: s.source_type, source_config: cfg, transforms: tf, sort_order: s.sort_order }
+      })
+    next.push({ placeholder_key: key, source_type: _phSourceType, source_config: config, transforms: transforms, sort_order: next.length })
+    await persistPhSources(next)
+    closePhSourceModal()
+  }
+
+  async function deletePhSource(index) {
+    if (!confirm('이 매핑을 삭제할까요?')) return
+    const next = _phSources
+      .filter(function(_, i) { return i !== index })
+      .map(function(row) {
+        let c = {}, t = []
+        try { c = row.source_config ? JSON.parse(row.source_config) : {} } catch (e) {}
+        try { t = row.transforms ? JSON.parse(row.transforms) : [] } catch (e) {}
+        return { placeholder_key: row.placeholder_key, source_type: row.source_type, source_config: c, transforms: t, sort_order: row.sort_order }
+      })
+    await persistPhSources(next)
+  }
+
+  async function persistPhSources(next) {
+    const r = await fetch('/api/ppt-menus/' + _phSourcesMenuId + '/placeholder-sources', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sources: next }),
+    })
+    const j = await r.json()
+    showAlert(j.ok ? '✅ 저장 완료' : '❌ ' + j.error, j.ok)
+    if (j.ok) await loadPlaceholderSources(_phSourcesMenuId)
   }
 
   // ── 마스터 템플릿 관리 ───────────────────────────────────────

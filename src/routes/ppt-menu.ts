@@ -25,7 +25,7 @@
  */
 
 import { Hono } from 'hono'
-import { query, queryOne } from '../db/client.js'
+import { query, queryOne, transaction } from '../db/client.js'
 import { inflateRawSync } from 'zlib'
 import { isAttachmentBuildKind, type AttachmentBuildKind } from '../lib/attachment-build-kind.js'
 
@@ -278,7 +278,29 @@ app.post('/migrate', async (c) => {
     await exec(`UPDATE ppt_menus SET build_kind='PLACEHOLDER_REPLACE' WHERE build_kind='PERSON_PAGES'`)
     await exec(`UPDATE ppt_menus SET build_kind='MIXED_REPLACE' WHERE build_kind='SHARED_TABLE'`)
 
-    return c.json({ ok: true, message: 'PPT 테이블 마이그레이션 완료 (8개 테이블 + 컬럼 업그레이드)' })
+    // 15. ppt_placeholder_sources — PLACEHOLDER_REPLACE 항목이 각 플레이스홀더([이름] 등)의
+    // 값을 어디서(DB 화이트리스트 필드/엑셀 셀/고정값/개인 도장 이미지) 가져와 어떻게
+    // 가공(변환 체인)할지 관리자가 페이지에서 직접 설정한 값(2026-09-11 사용자 확인 —
+    // "플레이스홀더 그룹도 이미지 치환처럼 페이지에서 모든걸 통제하게 하고 싶음"). 임의
+    // 서버 코드 실행이 아니라 src/lib/placeholder-transforms.ts에 미리 정의된 안전한 변환
+    // 함수만 조합하는 방식이다 — menu_id당 placeholder_key는 하나만 존재해야 하므로
+    // UNIQUE로 막아 같은 자리를 중복 설정 못 하게 한다.
+    await exec(`
+      CREATE TABLE IF NOT EXISTS ppt_placeholder_sources (
+        id SERIAL PRIMARY KEY,
+        menu_id INTEGER NOT NULL REFERENCES ppt_menus(id) ON DELETE CASCADE,
+        placeholder_key TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_config TEXT,
+        transforms TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(menu_id, placeholder_key)
+      )
+    `)
+
+    return c.json({ ok: true, message: 'PPT 테이블 마이그레이션 완료 (9개 테이블 + 컬럼 업그레이드)' })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     return c.json({ ok: false, error: msg }, 500)
@@ -1102,6 +1124,152 @@ app.put('/:id/rule', async (c) => {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     return c.json({ ok: false, error: msg }, 400)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════
+// [4-1] 플레이스홀더 값 소스 CRUD (PLACEHOLDER_REPLACE 항목 전용,
+//        src/lib/generic-placeholder-replace-doc.ts가 실제 생성 시 읽는 테이블)
+// ═══════════════════════════════════════════════════════════════════
+
+/** GET /api/ppt-menus/db-fields — DB 값 소스로 고를 수 있는 화이트리스트 필드 목록
+ *  (2026-09-11 — 관리자가 테이블/컬럼을 직접 입력하면 SQL 인젝션 위험이 있어, 코드에
+ *  미리 정의해둔 필드만 드롭다운으로 고르게 한다). */
+app.get('/db-fields', async (c) => {
+  const { DB_FIELD_WHITELIST } = await import('../lib/placeholder-db-fields.js')
+  return c.json({ ok: true, data: DB_FIELD_WHITELIST.map(f => ({ key: f.key, label: f.label, scope: f.scope })) })
+})
+
+/** GET /api/ppt-menus/transform-types — 변환 체인에서 고를 수 있는 내장 함수 목록. */
+app.get('/transform-types', async (c) => {
+  const { TRANSFORM_TYPE_LABELS } = await import('../lib/placeholder-transforms.js')
+  return c.json({ ok: true, data: Object.entries(TRANSFORM_TYPE_LABELS).map(([type, label]) => ({ type, label })) })
+})
+
+/** GET /api/ppt-menus/:id/placeholder-sources */
+app.get('/:id/placeholder-sources', async (c) => {
+  try {
+    const id = Number(c.req.param('id'))
+    const rows = await query(
+      `SELECT id, placeholder_key, source_type, source_config, transforms, sort_order
+       FROM ppt_placeholder_sources WHERE menu_id=$1 ORDER BY sort_order ASC, id ASC`,
+      [id]
+    )
+    return c.json({ ok: true, data: rows })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return c.json({ ok: false, error: msg }, 500)
+  }
+})
+
+/** PUT /api/ppt-menus/:id/placeholder-sources — 이 항목의 값 소스 전체를 한 번에
+ *  교체한다(관리자 UI가 매핑 목록을 통째로 편집하고 저장하는 구조라, 개별 CRUD 대신
+ *  트랜잭션으로 delete-then-insert 하는 편이 부분 실패로 목록이 꼬일 위험이 없다).
+ *  body: { sources: [{ placeholder_key, source_type, source_config, transforms, sort_order }] } */
+app.put('/:id/placeholder-sources', async (c) => {
+  try {
+    const id = Number(c.req.param('id'))
+    const body = await c.req.json()
+    const sources = Array.isArray(body.sources) ? body.sources : []
+    for (const s of sources) {
+      if (!s.placeholder_key || !s.source_type) {
+        return c.json({ ok: false, error: 'placeholder_key, source_type은 필수입니다' }, 400)
+      }
+      if (!['db', 'excel', 'fixed', 'stamp'].includes(s.source_type)) {
+        return c.json({ ok: false, error: `알 수 없는 source_type: ${s.source_type}` }, 400)
+      }
+    }
+    await transaction(async (client) => {
+      await client.query(`DELETE FROM ppt_placeholder_sources WHERE menu_id=$1`, [id])
+      for (let i = 0; i < sources.length; i++) {
+        const s = sources[i]
+        await client.query(
+          `INSERT INTO ppt_placeholder_sources
+             (menu_id, placeholder_key, source_type, source_config, transforms, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [
+            id, s.placeholder_key, s.source_type,
+            s.source_config ? JSON.stringify(s.source_config) : null,
+            s.transforms ? JSON.stringify(s.transforms) : null,
+            s.sort_order ?? i,
+          ]
+        )
+      }
+    })
+    return c.json({ ok: true })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return c.json({ ok: false, error: msg }, 400)
+  }
+})
+
+/** POST /api/ppt-menus/placeholder-sources-seed — 재직증명서/경력증명서/비상근 감리원
+ *  참여 동의서 3개는 아직 전용 코드(employee-certificate-doc.ts, ppt-consent.ts)로
+ *  동작하지만, 관리자가 "PPT 템플릿 관리" 화면에서 그 필드 매핑을 이미지 치환처럼
+ *  보고 고치고 지울 수 있어야 한다(2026-09-11 사용자 확인 — "기존의 로직을 기반으로
+ *  페이지에도 표시되게 할 수 있을거 아냐? 이미지 치환처럼 똑같이 표시하고, 그것도 변경
+ *  및 삭제할수있도록 해"). 그 두 파일에 적힌 필드 매핑을 그대로 옮겨 담은 1회성 시드다.
+ *  ⚠️ 이 세 항목은 화면에서 매핑을 보고 편집할 수 있게 됐을 뿐, 실제 생성은 여전히 그
+ *  전용 코드가 담당한다(ppt-attachment-bundle.ts의 ATTACHMENT_TYPES에 이미 등록돼 있어
+ *  동적 해석까지 가지 않음) — 화면에서 값을 고쳐도 다음 생성 결과에는 반영되지 않는다.
+ *  실제 생성 경로까지 이 시스템으로 옮기는 건 별도 확인 후 진행한다. menu_code로 대상
+ *  메뉴를 찾아 upsert하므로 여러 번 실행해도 안전하다(멱등). */
+app.post('/placeholder-sources-seed', async (c) => {
+  try {
+    const EMPLOYMENT_XLSM = '/activo/04.제안팀/99.악티보포털참조용/00.재직증명서발행파일v4.xlsm'
+    const EMPLOYEE_SHEET = '직원정보'
+
+    interface SeedSource { key: string; type: 'db' | 'excel' | 'fixed' | 'stamp'; config: Record<string, unknown>; transforms: unknown[] }
+    const employeeDirectoryFields = (): SeedSource[] => [
+      { key: '[이름]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'A' }, transforms: [] },
+      { key: '[입사일자]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'F' }, transforms: [{ type: 'suffix', params: { text: '.' } }] },
+      { key: '[생년월일]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'C' }, transforms: [{ type: 'dateFormat', params: { inputFormat: 'YYMMDD_RRN', outputFormat: 'YYYY년 MM월 DD일' } }] },
+      { key: '[직위]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'G' }, transforms: [] },
+      { key: '[근무부서]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'K' }, transforms: [] },
+      { key: '[입사일]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'F' }, transforms: [{ type: 'dateFormat', params: { inputFormat: 'YYYY.MM.DD', outputFormat: 'YYYY년 MM월 DD일' } }] },
+      { key: '[제출마감하루전]', type: 'db', config: { fieldKey: 'bid_deadline' }, transforms: [{ type: 'dayOffset', params: { days: -1 } }, { type: 'dateFormat', params: { inputFormat: 'YYYY-MM-DD', outputFormat: 'YYYY년 MM월 DD일' } }] },
+    ]
+
+    const SEED: { menuCode: string; sources: SeedSource[] }[] = [
+      {
+        menuCode: 'ATT_CONSENT',
+        sources: [
+          { key: '[소속]', type: 'fixed', config: { value: '악티보' }, transforms: [] },
+          { key: '[직위]', type: 'fixed', config: { value: ' 비상근' }, transforms: [] },
+          { key: '[이름]은', type: 'db', config: { fieldKey: 'person_name' }, transforms: [{ type: 'particle', params: { pair: ['은', '는'] } }] },
+          { key: '[이름]', type: 'db', config: { fieldKey: 'person_name' }, transforms: [] },
+          { key: '[분야]', type: 'db', config: { fieldKey: 'member_domain' }, transforms: [] },
+          { key: '[생년월일]', type: 'db', config: { fieldKey: 'personnel_birthdate' }, transforms: [{ type: 'dateFormat', params: { inputFormat: 'YYMMDD_CMP', outputFormat: 'YYYY.MM.DD' } }] },
+          { key: '[감리사업명]', type: 'db', config: { fieldKey: 'project_name' }, transforms: [] },
+          { key: '[주관기관]', type: 'db', config: { fieldKey: 'client_org' }, transforms: [] },
+          { key: '[입찰마감일하루전]', type: 'db', config: { fieldKey: 'bid_deadline' }, transforms: [{ type: 'dayOffset', params: { days: -1 } }, { type: 'dateFormat', params: { inputFormat: 'YYYY-MM-DD', outputFormat: 'YYYY년 M월 D일' } }] },
+          { key: '[도장]', type: 'stamp', config: {}, transforms: [] },
+        ],
+      },
+      { menuCode: 'ATT_EMPLOYMENT', sources: employeeDirectoryFields() },
+      { menuCode: 'ATT_CAREER_CERT', sources: employeeDirectoryFields() },
+    ]
+
+    const seeded: string[] = []
+    for (const group of SEED) {
+      const menu = await queryOne<{ id: number }>(`SELECT id FROM ppt_menus WHERE menu_code=$1`, [group.menuCode])
+      if (!menu) continue
+      for (let i = 0; i < group.sources.length; i++) {
+        const s = group.sources[i]
+        await exec(`
+          INSERT INTO ppt_placeholder_sources (menu_id, placeholder_key, source_type, source_config, transforms, sort_order)
+          VALUES ($1,$2,$3,$4,$5,$6)
+          ON CONFLICT (menu_id, placeholder_key) DO UPDATE
+            SET source_type=$3, source_config=$4, transforms=$5, sort_order=$6, updated_at=NOW()
+        `, [menu.id, s.key, s.type, JSON.stringify(s.config), JSON.stringify(s.transforms), i])
+      }
+      seeded.push(group.menuCode)
+    }
+
+    return c.json({ ok: true, seeded })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return c.json({ ok: false, error: msg }, 500)
   }
 })
 

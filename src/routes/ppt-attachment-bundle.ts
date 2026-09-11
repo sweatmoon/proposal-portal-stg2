@@ -14,8 +14,9 @@
  *     src/routes/ppt-attachment-bundle.ts      (이 파일) 표지+선택 항목을 순서대로 합치는 진입점
  *     src/routes/ppt-cover.ts                  0. 정성제안서 첨부 표지
  *     src/routes/ppt-schedule.ts               1. 감리원 일정 현황표
- *     src/routes/ppt-career.ts                 2. 투입 감리원별 실적 및 경력
- *     src/routes/ppt-consent.ts                3. 비상근 감리원 참여 동의서
+ *     src/routes/ppt-career.ts                 2. 투입 감리원별 실적 및 경력(동적 표 생성이라
+ *                                               여전히 전용 코드 — 아래 PLACEHOLDER_REPLACE
+ *                                               3종과 달리 값 소스 시스템 범위 밖, 2026-09-11)
  *   [IMAGE_REPLACE 6종 — 2026-09-11부터 이 묶음 생성 흐름에서는 각자 파일 대신
  *    resolveDynamicAttachmentType() + src/lib/generic-image-replace-doc.ts 하나로 통일해서
  *    처리한다(사용자 확인 — "해당 함수 및 모듈을 통해서 동일하게 첨부가 만들어지길").
@@ -28,6 +29,16 @@
  *     src/routes/ppt-tax-certificate.ts        국세 납세증명서 (단독 다운로드 전용)
  *     src/routes/ppt-local-tax-certificate.ts  지방세 납세증명서 (단독 다운로드 전용)
  *     src/routes/ppt-corporate-registry.ts     법인등기부등본 (단독 다운로드 전용)
+ *   [PLACEHOLDER_REPLACE 3종(비상근 동의서/재직증명서/경력증명서) — 2026-09-11부터 이
+ *    묶음 생성 흐름에서는 getMenuIdByCode() + src/lib/generic-placeholder-replace-doc.ts로
+ *    통일했다(사용자 확인 — "기존의 로직을 기반으로 페이지에도 표시되게... 당연히
+ *    반영되게해야지"). 필드 매핑은 ppt_placeholder_sources에 저장되고 "PPT 템플릿 관리 →
+ *    첨부 → 플레이스홀더 치환" 탭에서 관리한다(placeholder-sources-seed로 기존 하드코딩
+ *    매핑을 1회 이관해둠). 아래 3개 파일은 단독 다운로드 라우트로만 남아있고, 이 묶음
+ *    생성 흐름에서는 더 이상 import하지 않는다]
+ *     src/routes/ppt-consent.ts                비상근 감리원 참여 동의서 (단독 다운로드 전용)
+ *     src/routes/ppt-employment-certificate.ts 재직증명서 (단독 다운로드 전용)
+ *     src/routes/ppt-career-certificate.ts     경력증명서 (단독 다운로드 전용)
  *   공용 OOXML 조립 유틸 (위 라우트들이 나눠서 사용)
  *     src/lib/pptx-runtext.ts                  [placeholder] 텍스트 치환 (런 분산 대응)
  *     src/lib/pptx-table-rows.ts               일정표류 표 동적 확장(rowSpan/vMerge, 페이지 분할)
@@ -80,11 +91,9 @@ import type JSZip from 'jszip'
 import { query, queryOne } from '../db/client.js'
 import type { AttachmentBuildKind } from '../lib/attachment-build-kind.js'
 import { buildGenericImageReplaceZip } from '../lib/generic-image-replace-doc.js'
+import { buildGenericPlaceholderReplaceZip } from '../lib/generic-placeholder-replace-doc.js'
 import { buildScheduleZip } from './ppt-schedule.js'
 import { buildCareerZip, type FreeCareerOptions } from './ppt-career.js'
-import { buildConsentZip } from './ppt-consent.js'
-import { buildEmploymentCertificateZip } from './ppt-employment-certificate.js'
-import { buildCareerCertificateZip } from './ppt-career-certificate.js'
 import { buildStaffingStatusZip } from './ppt-staffing-status.js'
 import type { CompanyStampType } from '../lib/nas-client.js'
 import { buildCoverZip } from './ppt-cover.js'
@@ -183,6 +192,50 @@ async function resolveDynamicAttachmentType(menuCode: string): Promise<Attachmen
   }
 }
 
+/**
+ * PLACEHOLDER_REPLACE 항목 중 "PPT 템플릿 관리 → 첨부 → 플레이스홀더 치환" 탭에서 값
+ * 소스(DB/엑셀/고정값/도장 이미지)가 설정된 것을 이 함수 하나로 DB에서 찾아 즉석에서 항목
+ * 정의를 만든다(2026-09-11 사용자 확인 — "플레이스홀더 그룹도 이미지 치환처럼 페이지에서
+ * 모든걸 통제하게 하고 싶음"). resolveDynamicAttachmentType(IMAGE_REPLACE 전용)과 나란한
+ * 자리 — build_kind만 다르고 "코드 수정 없이 관리 페이지에서 새 항목을 완결한다"는 목적은
+ * 같다. 값 소스가 하나도 설정 안 된 PLACEHOLDER_REPLACE 메뉴(예: 아직 이 시스템으로
+ * 전환하지 않은 기존 항목)는 undefined를 반환해 "알 수 없는 첨부 항목" 처리로 넘긴다 —
+ * 재직증명서/경력증명서/비상근 동의서처럼 이미 전용 코드가 있는 항목은 ATTACHMENT_TYPES에
+ * 등록돼 있어 이 함수까지 오지 않는다. */
+async function resolveDynamicPlaceholderType(menuCode: string): Promise<AttachmentTypeDef | undefined> {
+  const row = await queryOne<{ id: number; menu_name: string; build_kind: string | null }>(
+    `SELECT id, menu_name, build_kind FROM ppt_menus WHERE menu_code = $1 AND category = 'attachment'`,
+    [menuCode]
+  )
+  if (!row || row.build_kind !== 'PLACEHOLDER_REPLACE') return undefined
+  const sourceCount = await queryOne<{ count: string }>(
+    `SELECT COUNT(*)::text as count FROM ppt_placeholder_sources WHERE menu_id = $1`,
+    [row.id]
+  )
+  if (!sourceCount || Number(sourceCount.count) === 0) return undefined
+  const menuId = row.id
+  const label = row.menu_name
+  return {
+    label,
+    buildKind: 'PLACEHOLDER_REPLACE',
+    build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
+      const result = await buildGenericPlaceholderReplaceZip(buf, projectId, menuId, label, titlePrefix, personnelNameFilter)
+      return result ? result.zip : null
+    },
+  }
+}
+
+/** ATTACHMENT_TYPES 중 재직증명서/경력증명서/비상근 동의서 3개가 자기 menu_code로
+ *  ppt_menus.id를 찾을 때 쓴다(2026-09-11 사용자 확인 — 기존 코드 로직을 그대로 값
+ *  소스로 옮긴 뒤 "당연히 반영되게해야지"에 따라 이 세 항목의 생성도 buildGenericPlaceholderReplaceZip
+ *  으로 전환). id는 매 요청마다 다시 찾는다 — 시드/마이그레이션으로 언제든 바뀔 수 있어
+ *  하드코딩하지 않는다. */
+async function getMenuIdByCode(menuCode: string): Promise<number> {
+  const row = await queryOne<{ id: number }>(`SELECT id FROM ppt_menus WHERE menu_code = $1`, [menuCode])
+  if (!row) throw new Error(`메뉴를 찾을 수 없습니다: ${menuCode}`)
+  return row.id
+}
+
 interface AttachmentTypeDef {
   label: string
   buildKind: AttachmentBuildKind
@@ -228,7 +281,10 @@ const ATTACHMENT_TYPES: Record<string, AttachmentTypeDef> = {
     label: '비상근 감리원 참여 동의서',
     buildKind: 'PLACEHOLDER_REPLACE',
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
-      const result = await buildConsentZip(buf, projectId, titlePrefix, personnelNameFilter)
+      const menuId = await getMenuIdByCode('ATT_CONSENT')
+      // 이 문서는 비상근 인력만 대상(2026-08-28 사용자 확인) — 값 소스가 아니라 문서
+      // 자체의 성격이라 memberFilter로 넘긴다.
+      const result = await buildGenericPlaceholderReplaceZip(buf, projectId, menuId, '비상근 감리원 참여 동의서', titlePrefix, personnelNameFilter, 'parttime')
       return result ? result.zip : null
     },
   },
@@ -236,7 +292,8 @@ const ATTACHMENT_TYPES: Record<string, AttachmentTypeDef> = {
     label: '재직증명서',
     buildKind: 'PLACEHOLDER_REPLACE',
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
-      const result = await buildEmploymentCertificateZip(buf, projectId, titlePrefix, personnelNameFilter)
+      const menuId = await getMenuIdByCode('ATT_EMPLOYMENT')
+      const result = await buildGenericPlaceholderReplaceZip(buf, projectId, menuId, '재직증명서', titlePrefix, personnelNameFilter)
       return result ? result.zip : null
     },
   },
@@ -244,7 +301,8 @@ const ATTACHMENT_TYPES: Record<string, AttachmentTypeDef> = {
     label: '경력증명서',
     buildKind: 'PLACEHOLDER_REPLACE',
     build: async (buf, projectId, _form, titlePrefix, personnelNameFilter) => {
-      const result = await buildCareerCertificateZip(buf, projectId, titlePrefix, personnelNameFilter)
+      const menuId = await getMenuIdByCode('ATT_CAREER_CERT')
+      const result = await buildGenericPlaceholderReplaceZip(buf, projectId, menuId, '경력증명서', titlePrefix, personnelNameFilter)
       return result ? result.zip : null
     },
   },
@@ -456,7 +514,7 @@ app.post('/:projectId', async (c) => {
     const registry: Record<string, AttachmentTypeDef> = { ...ATTACHMENT_TYPES }
     for (const id of order) {
       if (registry[id]) continue
-      const dynamicType = await resolveDynamicAttachmentType(id)
+      const dynamicType = (await resolveDynamicAttachmentType(id)) ?? (await resolveDynamicPlaceholderType(id))
       if (!dynamicType) return c.json({ ok: false, error: `알 수 없는 첨부 항목: ${id}` }, 400)
       registry[id] = dynamicType
     }

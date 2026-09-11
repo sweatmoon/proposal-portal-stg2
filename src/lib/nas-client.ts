@@ -115,6 +115,21 @@ async function withNasRetry<T>(label: string, fn: (sid: string) => Promise<T>): 
   return null
 }
 
+/** 관리자가 페이지에서 직접 입력한 임의의 NAS 파일 경로 하나를 통째로 받아온다 — 플레이스홀더
+ *  치환의 "엑셀 값 소스"(2026-09-11 — 값 소스/변환 일반화)처럼, 폴더가 아니라 파일 경로
+ *  자체가 관리자마다 다르게 설정되는 경우에 쓴다. 못 찾으면 null(호출 쪽에서 처리). */
+export async function fetchFileFromNasPath(path: string): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn(`[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 ${path} 조회를 건너뜁니다.`)
+    return null
+  }
+  return withNasRetry(`파일 조회(${path})`, async sid => {
+    const buf = await downloadFile(sid, path)
+    if (!buf) throw new Error('다운로드 실패: ' + path)
+    return buf
+  })
+}
+
 /** 폴더 안에서 .pptx 확장자인 파일 하나를 찾아 통째로 받아온다 — 표준재무제표/사업자등록증/
  *  국세 납세증명서처럼 "회사 서류 원본이 pptx 한 장짜리로 폴더에 들어있고, 파일명에 갱신
  *  날짜가 박혀 있어 계속 바뀌므로 파일명을 하드코딩하지 않는" 항목들이 공유하는 패턴
