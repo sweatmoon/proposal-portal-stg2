@@ -3249,8 +3249,9 @@ app.get('/ppt-templates', async (c) => {
       </div>
     </div>
 
-    <!-- 플레이스홀더 값 소스 추가/편집 모달 — DB/엑셀/고정값/도장 이미지 중 값 소스를
-         고르고, 안전한 내장 변환 함수(코드 실행 없음)를 체인으로 붙인다(2026-09-11 사용자
+    <!-- 플레이스홀더 값 소스 추가/편집 모달 — 텍스트(DB/엑셀/고정값)/이미지(도장(이름)/
+         경로 이미지) 2단으로 값 소스를 고르고, 안전한 내장 변환 함수(코드 실행 없음)를
+         체인으로 붙인다(2026-09-11 사용자
          확인 — "값 소스마다 db/엑셀/ppt 선택 가능하게"). -->
     <div id="phSourceModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-xl">
@@ -3267,12 +3268,11 @@ app.get('/ppt-templates', async (c) => {
           </div>
           <div>
             <label class="text-xs text-slate-500 font-medium mb-1.5 block">값 소스</label>
-            <div class="grid grid-cols-4 gap-1.5" id="phSourceTypeButtons">
-              <button type="button" data-type="db" onclick="setPhSourceType('db')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">DB</button>
-              <button type="button" data-type="excel" onclick="setPhSourceType('excel')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">엑셀</button>
-              <button type="button" data-type="fixed" onclick="setPhSourceType('fixed')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">고정값</button>
-              <button type="button" data-type="stamp" onclick="setPhSourceType('stamp')" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">도장 이미지</button>
+            <div class="grid grid-cols-2 gap-1.5 mb-1.5" id="phSourceKindButtons">
+              <button type="button" data-kind="text" onclick="setPhSourceKind('text')" class="ph-kind-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">텍스트</button>
+              <button type="button" data-kind="image" onclick="setPhSourceKind('image')" class="ph-kind-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">이미지</button>
             </div>
+            <div class="grid grid-cols-3 gap-1.5" id="phSourceTypeButtons"></div>
           </div>
           <div id="phSourceConfigArea"></div>
           <div class="pt-2 border-t border-slate-100">
@@ -3817,7 +3817,7 @@ app.get('/ppt-templates', async (c) => {
             <i class="fas fa-plus mr-1"></i>추가
           </button>
         </div>
-        <p class="text-xs text-slate-400 mb-2">템플릿의 [필드명] 자리마다 값을 어디서(DB/엑셀/고정값/도장 이미지) 가져올지 설정합니다.</p>
+        <p class="text-xs text-slate-400 mb-2">템플릿의 [필드명] 자리마다 값을 텍스트(DB/엑셀/고정값)로 채울지, 이미지(도장(이름)/경로 이미지)로 바꿔치기할지 설정합니다.</p>
         <div id="phSourceList" class="space-y-1.5">
           <div class="text-xs text-slate-300 px-1">불러오는 중…</div>
         </div>
@@ -4298,8 +4298,16 @@ app.get('/ppt-templates', async (c) => {
   let _phSources = []
   let _phSourcesMenuId = null
   let _phSourceType = 'fixed'
+  let _phSourceKind = 'text'
 
-  const PH_SOURCE_TYPE_LABELS = { db: 'DB', excel: '엑셀', fixed: '고정값', stamp: '도장 이미지' }
+  // 값 소스는 텍스트(DB/엑셀/고정값)와 이미지(도장(이름)/경로 이미지) 2단으로 고른다
+  // (2026-09-11 사용자 확인 — "텍스트/이미지로 라디오 선택할수있게 하고... 도장(이름)").
+  const PH_KIND_SUBTYPES = {
+    text: [{ type: 'db', label: 'DB' }, { type: 'excel', label: '엑셀' }, { type: 'fixed', label: '고정값' }],
+    image: [{ type: 'stamp', label: '도장(이름)' }, { type: 'image_path', label: '경로 이미지' }],
+  }
+  const PH_TYPE_TO_KIND = { db: 'text', excel: 'text', fixed: 'text', stamp: 'image', image_path: 'image' }
+  const PH_SOURCE_TYPE_LABELS = { db: 'DB', excel: '엑셀', fixed: '고정값', stamp: '도장(이름)', image_path: '경로 이미지' }
   const PH_DATE_INPUT_FORMATS = ['YYMMDD_RRN', 'YYMMDD_CMP', 'YYYYMMDD', 'YYYY-MM-DD', 'YYYY.MM.DD']
   const PH_DATE_OUTPUT_FORMATS = ['YYYY.MM.DD.', 'YYYY.MM.DD', 'YYYY-MM-DD', 'YYYY년 MM월 DD일', 'YYYY년 M월 D일']
 
@@ -4343,6 +4351,8 @@ app.get('/ppt-templates', async (c) => {
         detail = (cfg.sheet || '') + ' / ' + (cfg.valueColumn || '') + '열'
       } else if (s.source_type === 'fixed') {
         detail = cfg.value || ''
+      } else if (s.source_type === 'image_path') {
+        detail = cfg.nasPath || ''
       }
       let transformCount = 0
       try { transformCount = s.transforms ? JSON.parse(s.transforms).length : 0 } catch (e) {}
@@ -4353,6 +4363,33 @@ app.get('/ppt-templates', async (c) => {
         + '<span class="text-[11px] text-slate-400 truncate ml-auto">' + detail + '</span>'
         + '<button onclick="event.stopPropagation(); deletePhSource(' + i + ')" class="text-slate-300 hover:text-red-500 flex-shrink-0 px-1"><i class="fas fa-times"></i></button>'
         + '</div>'
+    }).join('')
+  }
+
+  // kind(텍스트/이미지) 버튼 강조 + 그 kind에 맞는 sub-type 버튼 목록을 다시 그린 뒤,
+  // explicitType이 있으면 그 타입으로(편집 시 기존 값 복원), 없으면 kind의 첫 sub-type으로 선택한다.
+  function setPhSourceKind(kind, cfg, explicitType) {
+    _phSourceKind = kind
+    document.querySelectorAll('.ph-kind-btn').forEach(function(btn) {
+      const active = btn.dataset.kind === kind
+      btn.classList.toggle('bg-teal-600', active)
+      btn.classList.toggle('text-white', active)
+      btn.classList.toggle('border-teal-600', active)
+      btn.classList.toggle('bg-white', !active)
+      btn.classList.toggle('text-slate-600', !active)
+      btn.classList.toggle('border-slate-200', !active)
+    })
+    renderPhTypeButtons(kind)
+    setPhSourceType(explicitType || PH_KIND_SUBTYPES[kind][0].type, cfg)
+  }
+
+  function renderPhTypeButtons(kind) {
+    const container = document.getElementById('phSourceTypeButtons')
+    if (!container) return
+    const subtypes = PH_KIND_SUBTYPES[kind]
+    container.className = kind === 'text' ? 'grid grid-cols-3 gap-1.5' : 'grid grid-cols-2 gap-1.5'
+    container.innerHTML = subtypes.map(function(st) {
+      return '<button type="button" data-type="' + st.type + '" onclick="setPhSourceType(this.dataset.type)" class="ph-type-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">' + st.label + '</button>'
     }).join('')
   }
 
@@ -4394,6 +4431,10 @@ app.get('/ppt-templates', async (c) => {
         + '<input id="phCfgFixedValue" type="text" value="' + (cfg.value || '') + '" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">'
     } else if (type === 'stamp') {
       area.innerHTML = '<p class="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">이 인물의 개인 도장 이미지로 템플릿 안의 자리표시자 이미지를 바꿔치기합니다 — 값 입력이 필요 없고, 템플릿에 도장 자리표시자 이미지가 있어야 합니다.</p>'
+    } else if (type === 'image_path') {
+      area.innerHTML = '<label class="text-xs text-slate-500 font-medium mb-1 block">NAS 경로(이미지 파일)</label>'
+        + '<input id="phCfgImagePath" type="text" value="' + (cfg.nasPath || '') + '" placeholder="예: /activo/04.제안팀/99.악티보포털참조용/00.회사로고.png" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono">'
+        + '<p class="text-xs text-slate-400 mt-1">인력별로 다르지 않고, 모든 슬라이드에 이 경로의 이미지 파일 하나를 그대로 씁니다.</p>'
     }
   }
 
@@ -4477,7 +4518,7 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('phSourceEditKey').value = ''
     document.getElementById('phSourceKey').value = ''
     document.getElementById('phTransformRows').innerHTML = ''
-    setPhSourceType('fixed')
+    setPhSourceKind('text')
     document.getElementById('phSourceModal').classList.remove('hidden')
   }
 
@@ -4494,7 +4535,7 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('phSourceKey').value = s.placeholder_key
     document.getElementById('phTransformRows').innerHTML = ''
     transforms.forEach(function(t) { addPhTransformRow(t) })
-    setPhSourceType(s.source_type, cfg)
+    setPhSourceKind(PH_TYPE_TO_KIND[s.source_type] || 'text', cfg, s.source_type)
     document.getElementById('phSourceModal').classList.remove('hidden')
   }
 
@@ -4513,6 +4554,8 @@ app.get('/ppt-templates', async (c) => {
       }
     } else if (type === 'fixed') {
       return { value: (document.getElementById('phCfgFixedValue') || {}).value || '' }
+    } else if (type === 'image_path') {
+      return { nasPath: (document.getElementById('phCfgImagePath') || {}).value || '' }
     }
     return {}
   }
@@ -4526,15 +4569,21 @@ app.get('/ppt-templates', async (c) => {
       showAlert('엑셀 소스는 경로/시트/이름 열/값 열을 모두 입력해주세요', false); return
     }
     if (_phSourceType === 'db' && !config.fieldKey) { showAlert('DB 필드를 선택해주세요', false); return }
+    if (_phSourceType === 'image_path' && !config.nasPath) { showAlert('이미지 파일의 NAS 경로를 입력해주세요', false); return }
+    const remaining = _phSources.filter(function(s) { return s.placeholder_key !== key && s.placeholder_key !== editKey })
+    // 이미지 값 소스(도장(이름)/경로 이미지)는 템플릿당 이미지 자리표시자가 하나뿐이라
+    // 1개만 지원한다(2026-09-11 사용자 확인) — 서버도 막지만, 저장 시도 전에 먼저 알려준다.
+    if ((_phSourceType === 'stamp' || _phSourceType === 'image_path') && remaining.some(function(s) { return s.source_type === 'stamp' || s.source_type === 'image_path' })) {
+      showAlert('이미지 값 소스(도장/경로 이미지)는 템플릿당 1개만 등록할 수 있습니다 — 기존 이미지 매핑을 먼저 삭제해주세요', false)
+      return
+    }
     const transforms = collectPhTransforms()
-    const next = _phSources
-      .filter(function(s) { return s.placeholder_key !== key && s.placeholder_key !== editKey })
-      .map(function(s) {
-        let cfg = {}, tf = []
-        try { cfg = s.source_config ? JSON.parse(s.source_config) : {} } catch (e) {}
-        try { tf = s.transforms ? JSON.parse(s.transforms) : [] } catch (e) {}
-        return { placeholder_key: s.placeholder_key, source_type: s.source_type, source_config: cfg, transforms: tf, sort_order: s.sort_order }
-      })
+    const next = remaining.map(function(s) {
+      let cfg = {}, tf = []
+      try { cfg = s.source_config ? JSON.parse(s.source_config) : {} } catch (e) {}
+      try { tf = s.transforms ? JSON.parse(s.transforms) : [] } catch (e) {}
+      return { placeholder_key: s.placeholder_key, source_type: s.source_type, source_config: cfg, transforms: tf, sort_order: s.sort_order }
+    })
     next.push({ placeholder_key: key, source_type: _phSourceType, source_config: config, transforms: transforms, sort_order: next.length })
     await persistPhSources(next)
     closePhSourceModal()

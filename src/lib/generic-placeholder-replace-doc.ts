@@ -1,7 +1,7 @@
 /**
  * [ppt-portal 추가 기능] "PPT 템플릿 관리 → 첨부 → 플레이스홀더 치환" 탭에서 관리자가
- * 값 소스(DB/엑셀/고정값/도장 이미지)와 변환 체인을 페이지에서 직접 설정한 항목을 위한
- * 범용 조립 함수(2026-09-11 사용자 확인 — "값 소스마다 db/엑셀/ppt 선택 가능하게",
+ * 값 소스(텍스트: DB/엑셀/고정값, 이미지: 도장(이름)/경로 고정 이미지)와 변환 체인을
+ * 페이지에서 직접 설정한 항목을 위한 범용 조립 함수(2026-09-11 사용자 확인 — "값 소스마다 db/엑셀/ppt 선택 가능하게",
  * "코드 로직을 페이지에서 입력" 요청에 대해 eval 없이 안전한 변환 함수 체인으로 답한
  * 설계). 이미지 치환의 generic-image-replace-doc.ts와 같은 역할이지만, 이쪽은 "인력
  * 수만큼 슬라이드를 복제해 텍스트 플레이스홀더를 채우는" PLACEHOLDER_REPLACE 항목용이다.
@@ -24,7 +24,7 @@ import { loadSheetRows } from './xlsx-parse.js'
 import { findDbField } from './placeholder-db-fields.js'
 import { applyTransformChain, type TransformSpec } from './placeholder-transforms.js'
 
-export type PlaceholderSourceType = 'db' | 'excel' | 'fixed' | 'stamp'
+export type PlaceholderSourceType = 'db' | 'excel' | 'fixed' | 'stamp' | 'image_path'
 
 interface PlaceholderSourceRow {
   id: number
@@ -146,7 +146,16 @@ export async function buildGenericPlaceholderReplaceZip(
     }
   }
 
-  const stampSources = parsed.filter(p => p.row.source_type === 'stamp')
+  // 이미지 값 소스(도장(이름)/경로 이미지, 2026-09-11 사용자 확인 — "텍스트/이미지로
+  // 라디오 선택... 도장(이름) 이거 구현하기가 어렵나?") — findPlaceholderImageTarget이
+  // 템플릿에서 이미지 자리표시자를 첫 번째 하나만 찾으므로, 템플릿당 이미지 값 소스는
+  // 1개까지만 지원한다(PUT /:id/placeholder-sources에서 이미 2개 이상은 막지만, 저장된
+  // 데이터가 어떤 경로로든 어긋났을 때를 대비해 생성 시점에도 한 번 더 확인한다).
+  const imageSources = parsed.filter(p => p.row.source_type === 'stamp' || p.row.source_type === 'image_path')
+  if (imageSources.length > 1) {
+    throw new Error('이미지 값 소스(도장/경로 이미지)는 템플릿당 1개만 지원합니다 — "PPT 템플릿 관리"에서 정리해주세요')
+  }
+  const imageSource = imageSources[0]
 
   // ── 사람별 플레이스홀더 맵 구성 — excel 소스에서 매칭되는 행을 못 찾은 사람은 이
   //    문서의 대상이 아니라고 보고 건너뛴다(재직증명서 등 기존 항목과 같은 원칙). ────
@@ -158,7 +167,7 @@ export async function buildGenericPlaceholderReplaceZip(
     const personMap: Record<string, string> = {}
 
     for (const p of parsed) {
-      if (p.row.source_type === 'stamp') continue // 텍스트 값이 아니라 이미지 슬롯 — 루프 밖에서 별도 처리
+      if (p.row.source_type === 'stamp' || p.row.source_type === 'image_path') continue // 텍스트 값이 아니라 이미지 슬롯 — 루프 밖에서 별도 처리
       let raw = ''
       if (p.row.source_type === 'fixed') {
         raw = String((p.config as { value?: string }).value ?? '')
@@ -207,7 +216,7 @@ export async function buildGenericPlaceholderReplaceZip(
     if (patched !== partXml) zip.file(partName, patched)
   }
 
-  const placeholderImageTarget = stampSources.length ? await findPlaceholderImageTarget(zip) : null
+  const placeholderImageTarget = imageSource ? await findPlaceholderImageTarget(zip) : null
 
   await buildMultiSlideDeck(
     zip,
@@ -215,10 +224,19 @@ export async function buildGenericPlaceholderReplaceZip(
     chunks
   )
 
-  if (placeholderImageTarget) {
-    const stampsByName = await fetchPersonalStampPngs(chunks.map(c => c.name))
-    const stampImages = chunks.map(c => stampsByName.get(c.name) ?? null)
-    await replaceSlideImages(zip, stampImages, placeholderImageTarget, 'stamp')
+  if (placeholderImageTarget && imageSource) {
+    let images: (Buffer | null)[]
+    if (imageSource.row.source_type === 'stamp') {
+      // 도장(이름) — 사람마다 다른 개인 도장 이미지를 이름으로 조회.
+      const stampsByName = await fetchPersonalStampPngs(chunks.map(c => c.name))
+      images = chunks.map(c => stampsByName.get(c.name) ?? null)
+    } else {
+      // 경로 이미지 — 모든 슬라이드에 같은 이미지 하나(관리자가 지정한 NAS 경로)를 쓴다.
+      const { nasPath } = imageSource.config as { nasPath: string }
+      const fixedImage = await fetchFileFromNasPath(nasPath)
+      images = chunks.map(() => fixedImage)
+    }
+    await replaceSlideImages(zip, images, placeholderImageTarget, 'placeholderimg')
   }
 
   return { zip, personCount: chunks.length, skipped, projectName: project.project_name }

@@ -1175,9 +1175,17 @@ app.put('/:id/placeholder-sources', async (c) => {
       if (!s.placeholder_key || !s.source_type) {
         return c.json({ ok: false, error: 'placeholder_key, source_type은 필수입니다' }, 400)
       }
-      if (!['db', 'excel', 'fixed', 'stamp'].includes(s.source_type)) {
+      if (!['db', 'excel', 'fixed', 'stamp', 'image_path'].includes(s.source_type)) {
         return c.json({ ok: false, error: `알 수 없는 source_type: ${s.source_type}` }, 400)
       }
+    }
+    // 이미지 값 소스(도장(이름)/경로 이미지)는 템플릿당 자리표시자 이미지가 하나뿐이라는
+    // 전제로 동작한다(findPlaceholderImageTarget이 첫 번째 이미지 하나만 찾음, 2026-09-11
+    // 사용자 확인 — "이미지1 치환... 도장(이름)"). 2개 이상 넣으면 어느 걸 써야 할지
+    // 알 수 없어 조용히 하나만 적용되는 대신 저장 단계에서 막는다.
+    const imageSourceCount = sources.filter((s: { source_type: string }) => s.source_type === 'stamp' || s.source_type === 'image_path').length
+    if (imageSourceCount > 1) {
+      return c.json({ ok: false, error: '이미지 값 소스(도장/경로 이미지)는 템플릿당 1개만 등록할 수 있습니다' }, 400)
     }
     await transaction(async (client) => {
       await client.query(`DELETE FROM ppt_placeholder_sources WHERE menu_id=$1`, [id])
