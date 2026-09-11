@@ -3190,9 +3190,9 @@ app.get('/ppt-templates', async (c) => {
           <div id="modalBuildKindWrap" class="hidden">
             <label class="text-xs text-slate-500 font-medium mb-1 block">분류 (생성 방식)</label>
             <select id="modalBuildKind" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-              <option value="PERSON_PAGES">인력별 페이지 — 인력 수만큼 슬라이드 복제 + 플레이스홀더 치환</option>
+              <option value="PLACEHOLDER_REPLACE">플레이스홀더 치환 — 인력 수만큼 슬라이드 복제 + 텍스트만 치환</option>
               <option value="IMAGE_REPLACE">이미지 치환 — PPT/PDF 원본을 이미지로 추출해 치환</option>
-              <option value="SHARED_TABLE">공용 표 — 한 페이지의 표를 인력별로 다르게 구성</option>
+              <option value="MIXED_REPLACE">혼합 치환 — 표 구성을 인력별로 바꾸면서 플레이스홀더도 치환</option>
             </select>
           </div>
           <div class="flex items-center gap-2">
@@ -3261,12 +3261,12 @@ app.get('/ppt-templates', async (c) => {
   const TAB_INACTIVE = 'px-5 py-2.5 text-sm font-semibold rounded-t-lg transition border border-b-0 -mb-px bg-slate-50 text-slate-500 border-transparent hover:text-slate-700'
 
   // 첨부 항목이 실제로 어떻게 만들어지는지 3가지 분류(src/lib/attachment-build-kind.ts와
-  // 동일한 이름/설명, 2026-09-10 사용자 확인 — "지금까지의 첨부 서류들을 이 3가지 버전으로
-  // 분류해"). 서버가 내려주는 menu.build_kind 값을 그대로 키로 쓴다.
+  // 동일한 이름/설명, 2026-09-11 사용자 확인 — "플레이스홀더 치환/이미지 치환/혼합 치환으로
+  // 재분류하자"). 서버가 내려주는 menu.build_kind 값을 그대로 키로 쓴다.
   const BUILD_KIND_LABELS = {
-    PERSON_PAGES:  '인력별 페이지',
-    IMAGE_REPLACE: '이미지 치환',
-    SHARED_TABLE:  '공용 표',
+    PLACEHOLDER_REPLACE: '플레이스홀더 치환',
+    IMAGE_REPLACE:       '이미지 치환',
+    MIXED_REPLACE:       '혼합 치환',
   }
 
   const HDR_PROPOSAL = '<button onclick=\\"runMigrate()\\" class=\\"px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition\\"><i class=\\"fas fa-database mr-1\\"></i>테이블 생성</button>'
@@ -3345,7 +3345,7 @@ app.get('/ppt-templates', async (c) => {
   // 표지처럼 분류가 없는 항목은 맨 위에 그대로, 나머지는 ATTACHMENT_GROUP_ORDER 순서로
   // 분류 이름 소제목 아래에 나열한다. proposal 탭의 parent_id 기반 트리와 달리 이 그룹핑은
   // DB에 저장된 계층이 아니라 build_kind 값으로 그때그때 계산하는 화면 전용 구조다.
-  const ATTACHMENT_GROUP_ORDER = ['PERSON_PAGES', 'IMAGE_REPLACE', 'SHARED_TABLE']
+  const ATTACHMENT_GROUP_ORDER = ['PLACEHOLDER_REPLACE', 'IMAGE_REPLACE', 'MIXED_REPLACE']
 
   function renderAttachmentItemRow(n, depth) {
     const hasTemplate = n.templates && n.templates[0] && !!n.templates[0].pptx_b64_key
@@ -3731,7 +3731,7 @@ app.get('/ppt-templates', async (c) => {
           }).join('') : '<div class="text-xs text-slate-300 px-1">등록된 서류 없음 — 위 "추가" 버튼으로 등록하세요</div>'}
         </div>
         \` : \`
-        <!-- 현재 템플릿 상태 (PERSON_PAGES/SHARED_TABLE 등 — 기존 그대로) -->
+        <!-- 현재 템플릿 상태 (PLACEHOLDER_REPLACE/MIXED_REPLACE 등 — 기존 그대로) -->
         <div class="mb-5 p-4 rounded-xl border \${hasFile ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}">
           <div class="flex items-center gap-2">
             <i class="fas \${hasFile ? 'fa-check-circle text-emerald-500' : 'fa-exclamation-circle text-slate-400'} text-lg"></i>
@@ -4027,7 +4027,7 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('modalSortOrder').value = '100'
     document.getElementById('modalIsEnabled').checked = true
     document.getElementById('modalBuildKindWrap').classList.toggle('hidden', _activeTab !== 'attachment')
-    document.getElementById('modalBuildKind').value = 'PERSON_PAGES'
+    document.getElementById('modalBuildKind').value = 'PLACEHOLDER_REPLACE'
     document.getElementById('menuModal').classList.remove('hidden')
   }
 
@@ -4043,7 +4043,7 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('modalSortOrder').value = menu.sort_order
     document.getElementById('modalIsEnabled').checked = !!menu.is_enabled
     document.getElementById('modalBuildKindWrap').classList.toggle('hidden', _activeTab !== 'attachment')
-    document.getElementById('modalBuildKind').value = menu.build_kind || 'PERSON_PAGES'
+    document.getElementById('modalBuildKind').value = menu.build_kind || 'PLACEHOLDER_REPLACE'
     document.getElementById('menuModal').classList.remove('hidden')
   }
 

@@ -253,7 +253,7 @@ app.post('/migrate', async (c) => {
     await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'proposal'`)
 
     // 11. ppt_menus 에 build_kind 컬럼 추가 — 첨부 항목이 실제로 어떻게 만들어지는지 3가지
-    // 분류(PERSON_PAGES/IMAGE_REPLACE/SHARED_TABLE, src/lib/attachment-build-kind.ts 참고)
+    // 분류(PLACEHOLDER_REPLACE/IMAGE_REPLACE/MIXED_REPLACE, src/lib/attachment-build-kind.ts 참고)
     // 중 어디에 속하는지 표시하는 가벼운 태그. proposal 카테고리 메뉴에는 해당 없어 NULL로
     // 둔다(2026-09-10 사용자 확인 — "템플릿(첨부/서류 항목)도 저 3가지로 가볍게 분류해줘").
     await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS build_kind TEXT`)
@@ -270,6 +270,13 @@ app.post('/migrate', async (c) => {
     // 그냥 최신 파일 하나를 쓴다(2026-09-10 사용자 확인 — "특수 필터/조건... 저걸로 모든걸
     // 해결 가능하게 만들어야해").
     await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS variant_options TEXT`)
+
+    // 14. build_kind 값 이름 변경 — PERSON_PAGES/SHARED_TABLE → PLACEHOLDER_REPLACE/
+    // MIXED_REPLACE(2026-09-11 사용자 확인 — "플레이스홀더 치환/이미지 치환/혼합 치환으로
+    // 재분류하자"). 컬럼 추가와 달리 이미 저장된 값 자체를 바꿔야 해서 UPDATE로 처리한다 —
+    // 이미 바뀐 값이면 조건에 안 걸려 조용히 건너뛰어 여러 번 실행해도 안전하다.
+    await exec(`UPDATE ppt_menus SET build_kind='PLACEHOLDER_REPLACE' WHERE build_kind='PERSON_PAGES'`)
+    await exec(`UPDATE ppt_menus SET build_kind='MIXED_REPLACE' WHERE build_kind='SHARED_TABLE'`)
 
     return c.json({ ok: true, message: 'PPT 테이블 마이그레이션 완료 (8개 테이블 + 컬럼 업그레이드)' })
   } catch (e: unknown) {
@@ -850,14 +857,14 @@ app.post('/attachment-seed', async (c) => {
     // 안 맞으므로 null로 둔다.
     const ITEMS: { code: string; name: string; sort: number; kind: AttachmentBuildKind | null }[] = [
       { code: 'ATT_COVER',        name: '0. 정성제안서 첨부 표지',       sort:  0, kind: null },
-      { code: 'ATT_SCHEDULE',     name: '감리원 일정 현황표',             sort: 10, kind: 'SHARED_TABLE' },
-      { code: 'ATT_CAREER',       name: '투입 감리원별 실적 및 경력',     sort: 20, kind: 'PERSON_PAGES' },
-      { code: 'ATT_CONSENT',      name: '비상근 감리원 참여 동의서',      sort: 30, kind: 'PERSON_PAGES' },
+      { code: 'ATT_SCHEDULE',     name: '감리원 일정 현황표',             sort: 10, kind: 'MIXED_REPLACE' },
+      { code: 'ATT_CAREER',       name: '투입 감리원별 실적 및 경력',     sort: 20, kind: 'PLACEHOLDER_REPLACE' },
+      { code: 'ATT_CONSENT',      name: '비상근 감리원 참여 동의서',      sort: 30, kind: 'PLACEHOLDER_REPLACE' },
       { code: 'ATT_STAMP_NO',     name: '범용 템플릿(도장X)',             sort: 40, kind: 'IMAGE_REPLACE' },
       { code: 'ATT_STAMP_YES',    name: '범용 템플릿(도장O)',             sort: 50, kind: 'IMAGE_REPLACE' },
-      { code: 'ATT_EMPLOYMENT',   name: '재직증명서',                     sort: 60, kind: 'PERSON_PAGES' },
-      { code: 'ATT_CAREER_CERT',  name: '경력증명서',                     sort: 70, kind: 'PERSON_PAGES' },
-      { code: 'ATT_STAFFING',     name: '상근감리원인력현황',             sort: 80, kind: 'SHARED_TABLE' },
+      { code: 'ATT_EMPLOYMENT',   name: '재직증명서',                     sort: 60, kind: 'PLACEHOLDER_REPLACE' },
+      { code: 'ATT_CAREER_CERT',  name: '경력증명서',                     sort: 70, kind: 'PLACEHOLDER_REPLACE' },
+      { code: 'ATT_STAFFING',     name: '상근감리원인력현황',             sort: 80, kind: 'MIXED_REPLACE' },
     ]
     const created: string[] = []
     const idByCode: Record<string, number> = {}
