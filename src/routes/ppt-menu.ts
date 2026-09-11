@@ -28,6 +28,7 @@ import { Hono } from 'hono'
 import { query, queryOne, transaction } from '../db/client.js'
 import { inflateRawSync } from 'zlib'
 import { isAttachmentBuildKind, type AttachmentBuildKind } from '../lib/attachment-build-kind.js'
+import { IMAGE_SOURCE_KEY } from '../lib/generic-placeholder-replace-doc.js'
 
 const app = new Hono()
 
@@ -1175,17 +1176,18 @@ app.put('/:id/placeholder-sources', async (c) => {
       if (!s.placeholder_key || !s.source_type) {
         return c.json({ ok: false, error: 'placeholder_key, source_type은 필수입니다' }, 400)
       }
-      if (!['db', 'excel', 'fixed', 'stamp', 'image_path'].includes(s.source_type)) {
+      if (!['db', 'excel', 'fixed', 'image'].includes(s.source_type)) {
         return c.json({ ok: false, error: `알 수 없는 source_type: ${s.source_type}` }, 400)
       }
     }
-    // 이미지 값 소스(도장(이름)/경로 이미지)는 템플릿당 자리표시자 이미지가 하나뿐이라는
-    // 전제로 동작한다(findPlaceholderImageTarget이 첫 번째 이미지 하나만 찾음, 2026-09-11
-    // 사용자 확인 — "이미지1 치환... 도장(이름)"). 2개 이상 넣으면 어느 걸 써야 할지
-    // 알 수 없어 조용히 하나만 적용되는 대신 저장 단계에서 막는다.
-    const imageSourceCount = sources.filter((s: { source_type: string }) => s.source_type === 'stamp' || s.source_type === 'image_path').length
+    // 이미지 값 소스는 템플릿당 자리표시자 이미지가 하나뿐이라는 전제로 동작한다
+    // (findPlaceholderImageTarget이 첫 번째 이미지 하나만 찾음, 2026-09-11 사용자 확인 —
+    // "값 소스... 이미지로 지정을 하면... 경로를 입력하게 하고, 파일명([특정단어])").
+    // 2개 이상 넣으면 어느 걸 써야 할지 알 수 없어 조용히 하나만 적용되는 대신 저장
+    // 단계에서 막는다.
+    const imageSourceCount = sources.filter((s: { source_type: string }) => s.source_type === 'image').length
     if (imageSourceCount > 1) {
-      return c.json({ ok: false, error: '이미지 값 소스(도장/경로 이미지)는 템플릿당 1개만 등록할 수 있습니다' }, 400)
+      return c.json({ ok: false, error: '이미지 값 소스는 템플릿당 1개만 등록할 수 있습니다' }, 400)
     }
     await transaction(async (client) => {
       await client.query(`DELETE FROM ppt_placeholder_sources WHERE menu_id=$1`, [id])
@@ -1212,22 +1214,24 @@ app.put('/:id/placeholder-sources', async (c) => {
 })
 
 /** POST /api/ppt-menus/placeholder-sources-seed — 재직증명서/경력증명서/비상근 감리원
- *  참여 동의서 3개는 아직 전용 코드(employee-certificate-doc.ts, ppt-consent.ts)로
- *  동작하지만, 관리자가 "PPT 템플릿 관리" 화면에서 그 필드 매핑을 이미지 치환처럼
- *  보고 고치고 지울 수 있어야 한다(2026-09-11 사용자 확인 — "기존의 로직을 기반으로
- *  페이지에도 표시되게 할 수 있을거 아냐? 이미지 치환처럼 똑같이 표시하고, 그것도 변경
- *  및 삭제할수있도록 해"). 그 두 파일에 적힌 필드 매핑을 그대로 옮겨 담은 1회성 시드다.
- *  ⚠️ 이 세 항목은 화면에서 매핑을 보고 편집할 수 있게 됐을 뿐, 실제 생성은 여전히 그
- *  전용 코드가 담당한다(ppt-attachment-bundle.ts의 ATTACHMENT_TYPES에 이미 등록돼 있어
- *  동적 해석까지 가지 않음) — 화면에서 값을 고쳐도 다음 생성 결과에는 반영되지 않는다.
- *  실제 생성 경로까지 이 시스템으로 옮기는 건 별도 확인 후 진행한다. menu_code로 대상
- *  메뉴를 찾아 upsert하므로 여러 번 실행해도 안전하다(멱등). */
+ *  참여 동의서 3개는 원래 전용 코드(employee-certificate-doc.ts, ppt-consent.ts)에
+ *  하드코딩돼 있던 필드 매핑을, 관리자가 "PPT 템플릿 관리" 화면에서 이미지 치환처럼
+ *  보고 고치고 지울 수 있도록 옮겨 담은 1회성 시드다(2026-09-11 사용자 확인 — "기존의
+ *  로직을 기반으로 페이지에도 표시되게 할 수 있을거 아냐?... 당연히 반영되게해야지").
+ *  이 세 항목의 실제 생성도 이 값 소스를 읽는 generic-placeholder-replace-doc.ts로
+ *  전환됐다(ppt-attachment-bundle.ts의 getMenuIdByCode 참고) — 화면에서 값을 고치면
+ *  다음 생성 결과에 그대로 반영된다. menu_code로 대상 메뉴를 찾아 upsert하므로 여러 번
+ *  실행해도 안전하다(멱등). */
 app.post('/placeholder-sources-seed', async (c) => {
   try {
     const EMPLOYMENT_XLSM = '/activo/04.제안팀/99.악티보포털참조용/00.재직증명서발행파일v4.xlsm'
     const EMPLOYEE_SHEET = '직원정보'
+    // 비상근 감리원 참여 동의서는 memberFilter='parttime'이라 대상이 전부 비상근이므로
+    // (ppt-attachment-bundle.ts의 consent 항목), 개인 도장 폴더도 "비상근" 하위폴더
+    // 하나만 보면 된다(기존 fetchPersonalStampPngs의 STAMP_BASE_PATH와 동일 경로).
+    const STAMP_FOLDER = '/activo/04.제안팀/99.악티보포털참조용/04.도장/02.인력도장/개인도장_상근_마진작업/비상근'
 
-    interface SeedSource { key: string; type: 'db' | 'excel' | 'fixed' | 'stamp'; config: Record<string, unknown>; transforms: unknown[] }
+    interface SeedSource { key: string; type: 'db' | 'excel' | 'fixed' | 'image'; config: Record<string, unknown>; transforms: unknown[] }
     const employeeDirectoryFields = (): SeedSource[] => [
       { key: '[이름]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'A' }, transforms: [] },
       { key: '[입사일자]', type: 'excel', config: { nasPath: EMPLOYMENT_XLSM, sheet: EMPLOYEE_SHEET, nameColumn: 'A', valueColumn: 'F' }, transforms: [{ type: 'suffix', params: { text: '.' } }] },
@@ -1251,7 +1255,7 @@ app.post('/placeholder-sources-seed', async (c) => {
           { key: '[감리사업명]', type: 'db', config: { fieldKey: 'project_name' }, transforms: [] },
           { key: '[주관기관]', type: 'db', config: { fieldKey: 'client_org' }, transforms: [] },
           { key: '[입찰마감일하루전]', type: 'db', config: { fieldKey: 'bid_deadline' }, transforms: [{ type: 'dayOffset', params: { days: -1 } }, { type: 'dateFormat', params: { inputFormat: 'YYYY-MM-DD', outputFormat: 'YYYY년 M월 D일' } }] },
-          { key: '[도장]', type: 'stamp', config: {}, transforms: [] },
+          { key: IMAGE_SOURCE_KEY, type: 'image', config: { nasPath: STAMP_FOLDER, matchBy: 'name', filenamePattern: '도장([이름]).png' }, transforms: [] },
         ],
       },
       { menuCode: 'ATT_EMPLOYMENT', sources: employeeDirectoryFields() },

@@ -3249,8 +3249,8 @@ app.get('/ppt-templates', async (c) => {
       </div>
     </div>
 
-    <!-- 플레이스홀더 값 소스 추가/편집 모달 — 텍스트(DB/엑셀/고정값)/이미지(도장(이름)/
-         경로 이미지) 2단으로 값 소스를 고르고, 안전한 내장 변환 함수(코드 실행 없음)를
+    <!-- 플레이스홀더 값 소스 추가/편집 모달 — 텍스트(DB/엑셀/고정값)/이미지(NAS 경로+
+         파일 선택 방식) 2단으로 값 소스를 고르고, 안전한 내장 변환 함수(코드 실행 없음)를
          체인으로 붙인다(2026-09-11 사용자
          확인 — "값 소스마다 db/엑셀/ppt 선택 가능하게"). -->
     <div id="phSourceModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -3261,19 +3261,24 @@ app.get('/ppt-templates', async (c) => {
         </div>
         <div class="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
           <input type="hidden" id="phSourceEditKey">
+          <!-- 값 소스 종류(텍스트/이미지)를 맨 위에서 먼저 고른다(2026-09-11 사용자 확인 —
+               "텍스트/이미지 라디오 버튼은 편집 상단에 둬") — 이미지는 [필드명] 텍스트를
+               찾아 치환하는 게 아니라 pptx 이미지 관계 하나를 통째로 바꿔치기하는 것이라,
+               "플레이스홀더 키" 개념 자체가 안 맞기 때문에 먼저 종류부터 정해야 그 아래
+               입력칸들이 말이 된다. -->
           <div>
+            <label class="text-xs text-slate-500 font-medium mb-1.5 block">값 소스 종류</label>
+            <div class="grid grid-cols-2 gap-1.5" id="phSourceKindButtons">
+              <button type="button" data-kind="text" onclick="setPhSourceKind('text')" class="ph-kind-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">텍스트</button>
+              <button type="button" data-kind="image" onclick="setPhSourceKind('image')" class="ph-kind-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">이미지</button>
+            </div>
+          </div>
+          <div id="phTextKeyArea">
             <label class="text-xs text-slate-500 font-medium mb-1 block">플레이스홀더 키 <span class="text-red-500">*</span></label>
             <input id="phSourceKey" type="text" placeholder="예: [이름]" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300">
             <p class="text-xs text-slate-400 mt-1">템플릿 pptx 안에 있는 자리표시자 그대로(대괄호 포함) 입력하세요.</p>
           </div>
-          <div>
-            <label class="text-xs text-slate-500 font-medium mb-1.5 block">값 소스</label>
-            <div class="grid grid-cols-2 gap-1.5 mb-1.5" id="phSourceKindButtons">
-              <button type="button" data-kind="text" onclick="setPhSourceKind('text')" class="ph-kind-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">텍스트</button>
-              <button type="button" data-kind="image" onclick="setPhSourceKind('image')" class="ph-kind-btn text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600">이미지</button>
-            </div>
-            <div class="grid grid-cols-3 gap-1.5" id="phSourceTypeButtons"></div>
-          </div>
+          <div class="grid grid-cols-3 gap-1.5" id="phSourceTypeButtons"></div>
           <div id="phSourceConfigArea"></div>
           <div class="pt-2 border-t border-slate-100">
             <div class="flex items-center justify-between mb-1.5">
@@ -3817,7 +3822,7 @@ app.get('/ppt-templates', async (c) => {
             <i class="fas fa-plus mr-1"></i>추가
           </button>
         </div>
-        <p class="text-xs text-slate-400 mb-2">템플릿의 [필드명] 자리마다 값을 텍스트(DB/엑셀/고정값)로 채울지, 이미지(도장(이름)/경로 이미지)로 바꿔치기할지 설정합니다.</p>
+        <p class="text-xs text-slate-400 mb-2">템플릿의 [필드명] 자리마다 값을 텍스트(DB/엑셀/고정값)로 채울지, 이미지 자리표시자를 통째로 바꿔치기(NAS 경로+파일 선택 방식)할지 설정합니다.</p>
         <div id="phSourceList" class="space-y-1.5">
           <div class="text-xs text-slate-300 px-1">불러오는 중…</div>
         </div>
@@ -4299,15 +4304,23 @@ app.get('/ppt-templates', async (c) => {
   let _phSourcesMenuId = null
   let _phSourceType = 'fixed'
   let _phSourceKind = 'text'
+  // 이미지 값 소스는 [필드명] 텍스트를 찾아 치환하는 게 아니라 pptx 이미지 관계 하나를
+  // 통째로 바꿔치기하는 것이라 관리자가 플레이스홀더 키를 입력하지 않는다(2026-09-11
+  // 사용자 확인 — "이미지 치환이라서 플레이스홀더 키가 [도장]이 아니잖아"). 템플릿당
+  // 이미지 자리가 1개뿐이라 이 고정 키 하나만 쓴다 — 서버의 IMAGE_SOURCE_KEY
+  // (src/lib/generic-placeholder-replace-doc.ts)와 반드시 같은 문자열이어야 한다.
+  const PH_IMAGE_SOURCE_KEY = '__image__'
 
-  // 값 소스는 텍스트(DB/엑셀/고정값)와 이미지(도장(이름)/경로 이미지) 2단으로 고른다
-  // (2026-09-11 사용자 확인 — "텍스트/이미지로 라디오 선택할수있게 하고... 도장(이름)").
+  // 값 소스는 텍스트(DB/엑셀/고정값)와 이미지(NAS 경로+파일 선택 방식) 2단으로 고른다
+  // (2026-09-11 사용자 확인 — "텍스트/이미지로 라디오 선택할수있게 하고... 이미지로
+  // 지정을 하면... 기본적으로 경로를 입력하게 하고, 파일명([특정단어])... 이름/최신날짜").
+  // 이미지는 "도장(이름)"/"경로 이미지"처럼 종류를 미리 나누지 않고 하나의 'image'
+  // source_type으로 통일했다 — 파일을 어떻게 고를지(matchBy)는 그 안의 드롭박스로 정한다.
   const PH_KIND_SUBTYPES = {
     text: [{ type: 'db', label: 'DB' }, { type: 'excel', label: '엑셀' }, { type: 'fixed', label: '고정값' }],
-    image: [{ type: 'stamp', label: '도장(이름)' }, { type: 'image_path', label: '경로 이미지' }],
   }
-  const PH_TYPE_TO_KIND = { db: 'text', excel: 'text', fixed: 'text', stamp: 'image', image_path: 'image' }
-  const PH_SOURCE_TYPE_LABELS = { db: 'DB', excel: '엑셀', fixed: '고정값', stamp: '도장(이름)', image_path: '경로 이미지' }
+  const PH_TYPE_TO_KIND = { db: 'text', excel: 'text', fixed: 'text', image: 'image' }
+  const PH_SOURCE_TYPE_LABELS = { db: 'DB', excel: '엑셀', fixed: '고정값', image: '이미지' }
   const PH_DATE_INPUT_FORMATS = ['YYMMDD_RRN', 'YYMMDD_CMP', 'YYYYMMDD', 'YYYY-MM-DD', 'YYYY.MM.DD']
   const PH_DATE_OUTPUT_FORMATS = ['YYYY.MM.DD.', 'YYYY.MM.DD', 'YYYY-MM-DD', 'YYYY년 MM월 DD일', 'YYYY년 M월 D일']
 
@@ -4344,6 +4357,7 @@ app.get('/ppt-templates', async (c) => {
       let cfg = {}
       try { cfg = s.source_config ? JSON.parse(s.source_config) : {} } catch (e) {}
       let detail = ''
+      let keyLabel = s.placeholder_key
       if (s.source_type === 'db') {
         const f = _dbFieldOptions.filter(function(x) { return x.key === cfg.fieldKey })[0]
         detail = f ? f.label : (cfg.fieldKey || '')
@@ -4351,13 +4365,14 @@ app.get('/ppt-templates', async (c) => {
         detail = (cfg.sheet || '') + ' / ' + (cfg.valueColumn || '') + '열'
       } else if (s.source_type === 'fixed') {
         detail = cfg.value || ''
-      } else if (s.source_type === 'image_path') {
-        detail = cfg.nasPath || ''
+      } else if (s.source_type === 'image') {
+        keyLabel = '이미지 자리'
+        detail = (cfg.matchBy === 'latest' ? '최신 파일' : ('이름: ' + (cfg.filenamePattern || ''))) + ' · ' + (cfg.nasPath || '')
       }
       let transformCount = 0
       try { transformCount = s.transforms ? JSON.parse(s.transforms).length : 0 } catch (e) {}
       return '<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 hover:border-teal-300 cursor-pointer transition" onclick="openEditPhSource(' + i + ')">'
-        + '<code class="text-xs font-mono text-teal-600 flex-shrink-0">' + s.placeholder_key + '</code>'
+        + '<code class="text-xs font-mono text-teal-600 flex-shrink-0">' + keyLabel + '</code>'
         + '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 flex-shrink-0">' + PH_SOURCE_TYPE_LABELS[s.source_type] + '</span>'
         + (transformCount ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 flex-shrink-0">변환 ' + transformCount + '개</span>' : '')
         + '<span class="text-[11px] text-slate-400 truncate ml-auto">' + detail + '</span>'
@@ -4366,8 +4381,10 @@ app.get('/ppt-templates', async (c) => {
     }).join('')
   }
 
-  // kind(텍스트/이미지) 버튼 강조 + 그 kind에 맞는 sub-type 버튼 목록을 다시 그린 뒤,
-  // explicitType이 있으면 그 타입으로(편집 시 기존 값 복원), 없으면 kind의 첫 sub-type으로 선택한다.
+  // kind(텍스트/이미지) 버튼 강조. 텍스트면 플레이스홀더 키 입력칸 + sub-type 버튼(DB/엑셀/
+  // 고정값)을 보여주고, 이미지면 둘 다 숨기고 바로 이미지 설정(NAS 경로+파일 선택 방식)으로
+  // 넘어간다 — 이미지는 sub-type이 하나뿐이라 고를 게 없다. explicitType이 있으면 그
+  // 타입으로(편집 시 기존 값 복원), 없으면 kind의 첫 sub-type으로 선택한다.
   function setPhSourceKind(kind, cfg, explicitType) {
     _phSourceKind = kind
     document.querySelectorAll('.ph-kind-btn').forEach(function(btn) {
@@ -4379,8 +4396,19 @@ app.get('/ppt-templates', async (c) => {
       btn.classList.toggle('text-slate-600', !active)
       btn.classList.toggle('border-slate-200', !active)
     })
-    renderPhTypeButtons(kind)
-    setPhSourceType(explicitType || PH_KIND_SUBTYPES[kind][0].type, cfg)
+    const keyArea = document.getElementById('phTextKeyArea')
+    const typeButtons = document.getElementById('phSourceTypeButtons')
+    if (kind === 'image') {
+      keyArea.classList.add('hidden')
+      typeButtons.classList.add('hidden')
+      typeButtons.innerHTML = ''
+      setPhSourceType('image', cfg)
+    } else {
+      keyArea.classList.remove('hidden')
+      typeButtons.classList.remove('hidden')
+      renderPhTypeButtons(kind)
+      setPhSourceType(explicitType || PH_KIND_SUBTYPES[kind][0].type, cfg)
+    }
   }
 
   function renderPhTypeButtons(kind) {
@@ -4429,12 +4457,37 @@ app.get('/ppt-templates', async (c) => {
     } else if (type === 'fixed') {
       area.innerHTML = '<label class="text-xs text-slate-500 font-medium mb-1 block">고정 값</label>'
         + '<input id="phCfgFixedValue" type="text" value="' + (cfg.value || '') + '" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">'
-    } else if (type === 'stamp') {
-      area.innerHTML = '<p class="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">이 인물의 개인 도장 이미지로 템플릿 안의 자리표시자 이미지를 바꿔치기합니다 — 값 입력이 필요 없고, 템플릿에 도장 자리표시자 이미지가 있어야 합니다.</p>'
-    } else if (type === 'image_path') {
-      area.innerHTML = '<label class="text-xs text-slate-500 font-medium mb-1 block">NAS 경로(이미지 파일)</label>'
-        + '<input id="phCfgImagePath" type="text" value="' + (cfg.nasPath || '') + '" placeholder="예: /activo/04.제안팀/99.악티보포털참조용/00.회사로고.png" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono">'
-        + '<p class="text-xs text-slate-400 mt-1">인력별로 다르지 않고, 모든 슬라이드에 이 경로의 이미지 파일 하나를 그대로 씁니다.</p>'
+    } else if (type === 'image') {
+      const matchBy = cfg.matchBy || 'name'
+      area.innerHTML = ''
+        + '<label class="text-xs text-slate-500 font-medium mb-1 block">NAS 경로(폴더)</label>'
+        + '<input id="phCfgImageNasPath" type="text" value="' + (cfg.nasPath || '') + '" placeholder="예: /activo/04.제안팀/99.악티보포털참조용/04.도장/02.인력도장/개인도장_상근_마진작업/비상근" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono mb-2">'
+        + '<label class="text-xs text-slate-500 font-medium mb-1 block">파일 선택 방식</label>'
+        + '<select id="phCfgImageMatchBy" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-2" onchange="onPhImageMatchByChange(this)">'
+        + '<option value="name"' + (matchBy === 'name' ? ' selected' : '') + '>이름 — 사람마다 다른 파일</option>'
+        + '<option value="latest"' + (matchBy === 'latest' ? ' selected' : '') + '>최신날짜 — 폴더의 가장 최신 파일 하나</option>'
+        + '</select>'
+        + '<div id="phCfgImagePatternArea"></div>'
+      renderPhImagePatternArea(matchBy, cfg)
+    }
+  }
+
+  function onPhImageMatchByChange(selectEl) {
+    renderPhImagePatternArea(selectEl.value, {})
+  }
+
+  // 파일 선택 방식(matchBy)에 따라 그 아래 보조 입력을 바꿔 그린다 — "변환 추가"에서
+  // 변환 종류를 고르면 파라미터 입력이 바뀌는 것과 같은 UX(2026-09-11 사용자 확인 —
+  // "변환 추가처럼 드롭박스를 만들어서").
+  function renderPhImagePatternArea(matchBy, cfg) {
+    const area = document.getElementById('phCfgImagePatternArea')
+    if (!area) return
+    if (matchBy === 'name') {
+      area.innerHTML = '<label class="text-xs text-slate-500 font-medium mb-1 block">파일명 패턴</label>'
+        + '<input id="phCfgImageFilenamePattern" type="text" value="' + (cfg.filenamePattern || '') + '" placeholder="예: 도장([이름]).png" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono">'
+        + '<p class="text-xs text-slate-400 mt-1">[이름] 자리에 이 사업 인력의 실제 이름이 들어간 파일을 폴더에서 바로 찾습니다.</p>'
+    } else {
+      area.innerHTML = '<p class="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">인력별로 다르지 않고, 이 폴더 안에서 파일이름 기준 가장 최신 파일 하나를 모든 슬라이드에 그대로 씁니다.</p>'
     }
   }
 
@@ -4532,7 +4585,7 @@ app.get('/ppt-templates', async (c) => {
     try { transforms = s.transforms ? JSON.parse(s.transforms) : [] } catch (e) {}
     document.getElementById('phSourceModalTitle').textContent = '플레이스홀더 매핑 편집'
     document.getElementById('phSourceEditKey').value = s.placeholder_key
-    document.getElementById('phSourceKey').value = s.placeholder_key
+    document.getElementById('phSourceKey').value = s.source_type === 'image' ? '' : s.placeholder_key
     document.getElementById('phTransformRows').innerHTML = ''
     transforms.forEach(function(t) { addPhTransformRow(t) })
     setPhSourceKind(PH_TYPE_TO_KIND[s.source_type] || 'text', cfg, s.source_type)
@@ -4554,27 +4607,32 @@ app.get('/ppt-templates', async (c) => {
       }
     } else if (type === 'fixed') {
       return { value: (document.getElementById('phCfgFixedValue') || {}).value || '' }
-    } else if (type === 'image_path') {
-      return { nasPath: (document.getElementById('phCfgImagePath') || {}).value || '' }
+    } else if (type === 'image') {
+      const matchBy = (document.getElementById('phCfgImageMatchBy') || {}).value || 'name'
+      const config = { nasPath: (document.getElementById('phCfgImageNasPath') || {}).value || '', matchBy: matchBy }
+      if (matchBy === 'name') config.filenamePattern = (document.getElementById('phCfgImageFilenamePattern') || {}).value || ''
+      return config
     }
     return {}
   }
 
   async function savePhSource() {
-    const key = document.getElementById('phSourceKey').value.trim()
-    if (!key) { showAlert('플레이스홀더 키를 입력해주세요', false); return }
+    const isImage = _phSourceKind === 'image'
+    const key = isImage ? PH_IMAGE_SOURCE_KEY : document.getElementById('phSourceKey').value.trim()
+    if (!isImage && !key) { showAlert('플레이스홀더 키를 입력해주세요', false); return }
     const editKey = document.getElementById('phSourceEditKey').value
     const config = collectPhConfig(_phSourceType)
     if (_phSourceType === 'excel' && (!config.nasPath || !config.sheet || !config.nameColumn || !config.valueColumn)) {
       showAlert('엑셀 소스는 경로/시트/이름 열/값 열을 모두 입력해주세요', false); return
     }
     if (_phSourceType === 'db' && !config.fieldKey) { showAlert('DB 필드를 선택해주세요', false); return }
-    if (_phSourceType === 'image_path' && !config.nasPath) { showAlert('이미지 파일의 NAS 경로를 입력해주세요', false); return }
+    if (isImage && !config.nasPath) { showAlert('NAS 경로를 입력해주세요', false); return }
+    if (isImage && config.matchBy === 'name' && !config.filenamePattern) { showAlert('파일명 패턴을 입력해주세요', false); return }
     const remaining = _phSources.filter(function(s) { return s.placeholder_key !== key && s.placeholder_key !== editKey })
-    // 이미지 값 소스(도장(이름)/경로 이미지)는 템플릿당 이미지 자리표시자가 하나뿐이라
-    // 1개만 지원한다(2026-09-11 사용자 확인) — 서버도 막지만, 저장 시도 전에 먼저 알려준다.
-    if ((_phSourceType === 'stamp' || _phSourceType === 'image_path') && remaining.some(function(s) { return s.source_type === 'stamp' || s.source_type === 'image_path' })) {
-      showAlert('이미지 값 소스(도장/경로 이미지)는 템플릿당 1개만 등록할 수 있습니다 — 기존 이미지 매핑을 먼저 삭제해주세요', false)
+    // 이미지 값 소스는 템플릿당 이미지 자리표시자가 하나뿐이라 1개만 지원한다(2026-09-11
+    // 사용자 확인) — 서버도 막지만, 저장 시도 전에 먼저 알려준다.
+    if (isImage && remaining.some(function(s) { return s.source_type === 'image' })) {
+      showAlert('이미지 값 소스는 템플릿당 1개만 등록할 수 있습니다 — 기존 이미지 매핑을 먼저 삭제해주세요', false)
       return
     }
     const transforms = collectPhTransforms()

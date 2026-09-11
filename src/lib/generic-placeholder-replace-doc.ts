@@ -1,10 +1,27 @@
 /**
  * [ppt-portal 추가 기능] "PPT 템플릿 관리 → 첨부 → 플레이스홀더 치환" 탭에서 관리자가
- * 값 소스(텍스트: DB/엑셀/고정값, 이미지: 도장(이름)/경로 고정 이미지)와 변환 체인을
- * 페이지에서 직접 설정한 항목을 위한 범용 조립 함수(2026-09-11 사용자 확인 — "값 소스마다 db/엑셀/ppt 선택 가능하게",
- * "코드 로직을 페이지에서 입력" 요청에 대해 eval 없이 안전한 변환 함수 체인으로 답한
- * 설계). 이미지 치환의 generic-image-replace-doc.ts와 같은 역할이지만, 이쪽은 "인력
- * 수만큼 슬라이드를 복제해 텍스트 플레이스홀더를 채우는" PLACEHOLDER_REPLACE 항목용이다.
+ * 값 소스(텍스트: DB/엑셀/고정값, 이미지: NAS 경로+파일 선택 방식)와 변환 체인을 페이지에서
+ * 직접 설정한 항목을 위한 범용 조립 함수(2026-09-11 사용자 확인 — "값 소스마다 db/엑셀/ppt
+ * 선택 가능하게", "코드 로직을 페이지에서 입력" 요청에 대해 eval 없이 안전한 변환 함수
+ * 체인으로 답한 설계). 이미지 치환의 generic-image-replace-doc.ts와 같은 역할이지만,
+ * 이쪽은 "인력 수만큼 슬라이드를 복제해 텍스트 플레이스홀더를 채우는" PLACEHOLDER_REPLACE
+ * 항목용이다.
+ *
+ * 이미지 값 소스는 "도장(이름)"/"경로 이미지"처럼 종류를 미리 나눠두지 않고, 하나의
+ * source_type='image'로 통일했다(2026-09-11 사용자 확인 — "이미지로 지정을 하면
+ * 도장(이름)/경로 이미지로 주는게 아니라 기본적으로 경로를 입력하게 하고, 파일명
+ * ([특정단어])... 이름/최신날짜 등으로 선택"). config.matchBy가 실제 동작을 가른다:
+ *   'name'   NAS 폴더 경로 + 파일명 패턴(예: "도장([이름]).png") — 사람마다 [이름]을
+ *            실제 이름으로 바꿔 그 파일 하나를 직접 받아온다(폴더 목록 조회 없이 바로
+ *            시도 — 기존 fetchPersonalStampPngs와 같은 방식을 일반화한 것).
+ *   'latest' NAS 폴더 경로만 — 폴더 안에서 파일이름 기준 가장 최신 파일 하나를 받아와
+ *            모든 슬라이드에 똑같이 쓴다(인력별로 다르지 않음 — 이미지 치환의 "이 폴더의
+ *            최신 파일"과 같은 방식).
+ * 플레이스홀더 키는 텍스트 값 소스에만 의미가 있어서(실제 [필드명] 문자열을 찾아
+ * 치환하는 대상), 이미지 값 소스는 관리자가 입력하지 않고 고정 내부 키(IMAGE_SOURCE_KEY)
+ * 하나를 자동으로 쓴다 — "이미지 치환이라서 플레이스홀더 키가 [도장]이 아니잖아"라는
+ * 지적대로, 이미지 자리는 텍스트 검색·치환이 아니라 pptx 안의 이미지 관계(Target) 하나를
+ * 통째로 바꿔치기하는 것이기 때문이다.
  *
  * 값 소스는 ppt_placeholder_sources 테이블(menu_id, placeholder_key, source_type,
  * source_config, transforms)에 저장되며, 기존 재직증명서/경력증명서/비상근 감리원 참여
@@ -19,12 +36,17 @@ import { query, queryOne } from '../db/client.js'
 import { applyPlaceholderMap } from './pptx-runtext.js'
 import { buildMultiSlideDeck } from './pptx-deck.js'
 import { findPlaceholderImageTarget, replaceSlideImages } from './pptx-image-swap.js'
-import { fetchFileFromNasPath, fetchPersonalStampPngs } from './nas-client.js'
+import { fetchFileFromNasPath, fetchLatestFileFromFolder } from './nas-client.js'
 import { loadSheetRows } from './xlsx-parse.js'
 import { findDbField } from './placeholder-db-fields.js'
 import { applyTransformChain, type TransformSpec } from './placeholder-transforms.js'
 
-export type PlaceholderSourceType = 'db' | 'excel' | 'fixed' | 'stamp' | 'image_path'
+export type PlaceholderSourceType = 'db' | 'excel' | 'fixed' | 'image'
+
+/** 이미지 값 소스는 텍스트 검색용 [필드명]이 아니라 pptx 이미지 관계 하나를 통째로 바꿔치기
+ *  하는 것이라, 관리자가 타이핑하지 않고 이 고정 키를 내부적으로 쓴다(템플릿당 1개 제한과
+ *  맞물려 항상 이 값 하나뿐이다). */
+export const IMAGE_SOURCE_KEY = '__image__'
 
 interface PlaceholderSourceRow {
   id: number
@@ -146,14 +168,14 @@ export async function buildGenericPlaceholderReplaceZip(
     }
   }
 
-  // 이미지 값 소스(도장(이름)/경로 이미지, 2026-09-11 사용자 확인 — "텍스트/이미지로
-  // 라디오 선택... 도장(이름) 이거 구현하기가 어렵나?") — findPlaceholderImageTarget이
-  // 템플릿에서 이미지 자리표시자를 첫 번째 하나만 찾으므로, 템플릿당 이미지 값 소스는
-  // 1개까지만 지원한다(PUT /:id/placeholder-sources에서 이미 2개 이상은 막지만, 저장된
-  // 데이터가 어떤 경로로든 어긋났을 때를 대비해 생성 시점에도 한 번 더 확인한다).
-  const imageSources = parsed.filter(p => p.row.source_type === 'stamp' || p.row.source_type === 'image_path')
+  // 이미지 값 소스(2026-09-11 사용자 확인 — "텍스트/이미지로 라디오 선택... 파일명
+  // ([특정단어])... 이름/최신날짜로 선택") — findPlaceholderImageTarget이 템플릿에서
+  // 이미지 자리표시자를 첫 번째 하나만 찾으므로, 템플릿당 이미지 값 소스는 1개까지만
+  // 지원한다(PUT /:id/placeholder-sources에서 이미 2개 이상은 막지만, 저장된 데이터가
+  // 어떤 경로로든 어긋났을 때를 대비해 생성 시점에도 한 번 더 확인한다).
+  const imageSources = parsed.filter(p => p.row.source_type === 'image')
   if (imageSources.length > 1) {
-    throw new Error('이미지 값 소스(도장/경로 이미지)는 템플릿당 1개만 지원합니다 — "PPT 템플릿 관리"에서 정리해주세요')
+    throw new Error('이미지 값 소스는 템플릿당 1개만 지원합니다 — "PPT 템플릿 관리"에서 정리해주세요')
   }
   const imageSource = imageSources[0]
 
@@ -167,7 +189,7 @@ export async function buildGenericPlaceholderReplaceZip(
     const personMap: Record<string, string> = {}
 
     for (const p of parsed) {
-      if (p.row.source_type === 'stamp' || p.row.source_type === 'image_path') continue // 텍스트 값이 아니라 이미지 슬롯 — 루프 밖에서 별도 처리
+      if (p.row.source_type === 'image') continue // 텍스트 값이 아니라 이미지 슬롯 — 루프 밖에서 별도 처리
       let raw = ''
       if (p.row.source_type === 'fixed') {
         raw = String((p.config as { value?: string }).value ?? '')
@@ -225,15 +247,25 @@ export async function buildGenericPlaceholderReplaceZip(
   )
 
   if (placeholderImageTarget && imageSource) {
+    const { nasPath, matchBy, filenamePattern } = imageSource.config as {
+      nasPath: string
+      matchBy: 'name' | 'latest'
+      filenamePattern?: string
+    }
     let images: (Buffer | null)[]
-    if (imageSource.row.source_type === 'stamp') {
-      // 도장(이름) — 사람마다 다른 개인 도장 이미지를 이름으로 조회.
-      const stampsByName = await fetchPersonalStampPngs(chunks.map(c => c.name))
-      images = chunks.map(c => stampsByName.get(c.name) ?? null)
+    if (matchBy === 'name') {
+      // 사람마다 파일명 패턴의 [이름]을 실제 이름으로 바꿔 그 파일 하나를 직접 받아온다
+      // (폴더 목록 조회 없이 바로 시도 — 기존 개인 도장 조회와 같은 방식).
+      images = await Promise.all(
+        chunks.map(async c => {
+          const fileName = (filenamePattern ?? '').replace(/\[이름\]/g, c.name)
+          if (!fileName) return null
+          return fetchFileFromNasPath(`${nasPath}/${fileName}`)
+        })
+      )
     } else {
-      // 경로 이미지 — 모든 슬라이드에 같은 이미지 하나(관리자가 지정한 NAS 경로)를 쓴다.
-      const { nasPath } = imageSource.config as { nasPath: string }
-      const fixedImage = await fetchFileFromNasPath(nasPath)
+      // 최신날짜 — 폴더 안 가장 최신 파일 하나를 모든 슬라이드에 똑같이 쓴다(인력별 아님).
+      const fixedImage = await fetchLatestFileFromFolder(nasPath, pageTitle)
       images = chunks.map(() => fixedImage)
     }
     await replaceSlideImages(zip, images, placeholderImageTarget, 'placeholderimg')

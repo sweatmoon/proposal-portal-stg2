@@ -207,6 +207,26 @@ export async function fetchLatestPptxOrPdfFromFolder(
   })
 }
 
+/** 폴더 안에서 확장자 상관없이 파일이름 기준 가장 최신 파일 하나를 통째로 받아온다 —
+ *  플레이스홀더 치환의 "이미지" 값 소스 중 "최신날짜"(2026-09-11 사용자 확인 — "파일명
+ *  [특정단어]... 이름/최신날짜 등으로 선택") 방식에서 쓴다. 이미지 파일(.png/.jpg 등)은
+ *  확장자가 다양할 수 있어서 fetchLatestPptxOrPdfFromFolder처럼 특정 확장자로 제한하지
+ *  않는다. */
+export async function fetchLatestFileFromFolder(folder: string, label: string): Promise<Buffer | null> {
+  if (!NAS_BASE_URL || !NAS_USERNAME || !NAS_PASSWORD) {
+    console.warn(`[nas-client] NAS_BASE_URL/NAS_USERNAME/NAS_PASSWORD 환경변수가 없어 ${label} 조회를 건너뜁니다.`)
+    return null
+  }
+  return withNasRetry(`${label} 조회`, async sid => {
+    const files = await listFolder(sid, folder)
+    const latest = files.filter(f => !f.isdir).sort((a, b) => a.name.localeCompare(b.name, 'ko')).pop()
+    if (!latest) throw new Error('폴더에서 파일을 찾지 못함: ' + folder)
+    const buf = await downloadFile(sid, `${folder}/${latest.name}`)
+    if (!buf) throw new Error('다운로드 실패: ' + latest.name)
+    return buf
+  })
+}
+
 // 회사 표준재무제표 pptx가 있는 폴더. 파일명에 갱신 날짜가 박혀 있어("표준재무제표(3년)_
 // 260720.pptx") 계속 바뀌므로 파일명을 하드코딩하지 않고, 이 폴더에서 .pptx 확장자인
 // 파일을 찾아 그때그때 사용한다(2026-09-02 확인 — 폴더 안에 연도별 .pdf도 같이 있지만
