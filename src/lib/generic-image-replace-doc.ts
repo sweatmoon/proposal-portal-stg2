@@ -20,20 +20,28 @@ import { buildMultiSlideDeck } from './pptx-deck.js'
 import { findPlaceholderImageTarget, replaceSlideImages, extractAllImagesFromPptx } from './pptx-image-swap.js'
 import { buildStampedDeckZip } from './pptx-stamped-doc.js'
 import { pdfAllPagesToPng } from './pdf-render.js'
-import { fetchLatestPptxOrPdfFromFolder, fetchCompanyStampPng, type CompanyStampType } from './nas-client.js'
+import { fetchLatestPptxOrPdfFromFolder, fetchLatestPdfFromFolder, fetchCompanyStampPng, type CompanyStampType } from './nas-client.js'
 
 export interface GenericImageReplaceZipResult {
   zip: JSZip
   projectName: string
 }
 
+/**
+ * filenamePredicate: 법인등기부등본의 "말소사항 포함/미포함"처럼, 한 폴더 안에 파일명으로
+ * 구분되는 여러 종류(variant_options, 2026-09-10 사용자 확인 — "특수 필터/조건... 저걸로
+ * 모든걸 해결 가능하게 만들어야해")가 있을 때 그 중 사용자가 고른 종류만 걸러낸다. 넘기면
+ * (해당 폴더가 pdf만 있다는 전제로) fetchLatestPdfFromFolder를 predicate와 함께 쓰고,
+ * 안 넘기면(옵션이 아예 없는 보통의 경우) 기존처럼 pptx/pdf 상관없이 최신 파일을 쓴다.
+ */
 export async function buildGenericImageReplaceZip(
   templateBuf: Buffer,
   projectId: number,
   label: string,
   nasPath: string,
   stampType: CompanyStampType | null,
-  titlePrefix = ''
+  titlePrefix = '',
+  filenamePredicate?: (name: string) => boolean
 ): Promise<GenericImageReplaceZipResult> {
   const project = await queryOne<{ project_name: string }>(
     `SELECT project_name FROM audit_projects WHERE id = $1`,
@@ -42,7 +50,9 @@ export async function buildGenericImageReplaceZip(
   if (!project) throw new Error('사업을 찾을 수 없습니다')
 
   const [sourceFile, stampPng] = await Promise.all([
-    fetchLatestPptxOrPdfFromFolder(nasPath, label),
+    filenamePredicate
+      ? fetchLatestPdfFromFolder(nasPath, label, filenamePredicate).then(buf => (buf ? { buf, isPdf: true as const } : null))
+      : fetchLatestPptxOrPdfFromFolder(nasPath, label),
     stampType ? fetchCompanyStampPng(stampType) : Promise.resolve(null),
   ])
   if (!sourceFile) throw new Error(`NAS에서 "${label}" 원본 파일을 가져오지 못했습니다 (경로: ${nasPath})`)

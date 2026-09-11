@@ -2099,6 +2099,12 @@ app.get('/ppt-generate', (c) => {
               </label>
             </div>
           </div>
+
+          <!-- "+"로 등록한 첨부서류가 선택 옵션(variant_options)을 가지고 있으면 여기에
+               항목별로 라디오가 자동으로 생긴다 — 법인등기부등본의 "말소사항 포함/미포함"을
+               일반화한 것(2026-09-10 사용자 확인 — "특수 필터/조건... 저걸로 모든걸 해결
+               가능하게 만들어야해"). renderVariantWraps()가 채운다. -->
+          <div id="bundleVariantWrap"></div>
         </div>
 
       </div>
@@ -2213,6 +2219,7 @@ app.get('/ppt-generate', (c) => {
   var bundleItemChecked = {}          // { catalogId: true/false } — ITEM_CATALOG의 id 기준
   var bundleStampType = null          // '원본대조필' | '사실과상위없음' | null
   var bundleCorpRegistryIncludeCancelled = null  // 'true' | 'false' | null
+  var bundleVariantChoice = {}  // { itemId: '옵션 인덱스(문자열)' } — variantOptions가 있는 항목 전용
 
   // 실제 첨부 문서 종류 카탈로그. "회사"(company) 그룹은 이제 고정 배열이 아니라 DB(ppt_menus)
   // 에서 "범용 템플릿(도장X/도장O)" 슬롯의 자식 메뉴로 동적으로 읽어온다(2026-09-10 사용자
@@ -2398,6 +2405,7 @@ app.get('/ppt-generate', (c) => {
     bundleMenus = []
     bundleStampType = null
     bundleCorpRegistryIncludeCancelled = null
+    bundleVariantChoice = {}
     bundleRepeatMode = {}
     bundleSortBasis = 'document'
     personnelChecked = {}
@@ -2408,6 +2416,7 @@ app.get('/ppt-generate', (c) => {
     document.querySelectorAll('input[name="bundleStamp"]').forEach(function(el) { el.checked = false })
     document.getElementById('bundleCorpRegistryWrap').classList.add('hidden')
     document.querySelectorAll('input[name="bundleCorpRegistryCancelled"]').forEach(function(el) { el.checked = false })
+    document.getElementById('bundleVariantWrap').innerHTML = ''
     document.querySelectorAll('input[name="bundleSortBasis"]').forEach(function(el) { el.checked = (el.value === 'document') })
     // 키워드 행 초기화 — "② 인력 선택/③ 키워드 변환" UI는 아직 이 모달에 마크업이 없고
     // 백엔드도 keywords/personnelKeywords/personnelIds를 안 읽는 미완성 기능이라, 그
@@ -2438,6 +2447,8 @@ app.get('/ppt-generate', (c) => {
           m.children.forEach(function(c) {
             c.templates = m.templates
             bundleMenus.push(c)
+            var variantOptions = []
+            try { variantOptions = c.variant_options ? JSON.parse(c.variant_options) : [] } catch (e) {}
             companyItems.push({
               id: c.menu_code,
               label: c.menu_name,
@@ -2446,6 +2457,7 @@ app.get('/ppt-generate', (c) => {
               group: 'company',
               stamp: m.menu_code === 'ATT_STAMP_YES',
               corpRegistry: c.menu_code === 'ATT_CORPREGISTRY',
+              variantOptions: variantOptions,
             })
           })
         } else {
@@ -2531,11 +2543,44 @@ app.get('/ppt-generate', (c) => {
     }
   }
 
+  /** 체크된 항목 중 variantOptions(2개 이상)가 있는 것마다 라디오 그룹을 하나씩 그린다 —
+   *  법인등기부등본의 "말소사항 포함/미포함"을 "+"로 등록한 모든 항목에 일반화한 것
+   *  (2026-09-10 사용자 확인 — "특수 필터/조건... 저걸로 모든걸 해결 가능하게 만들어야해"). */
+  function renderVariantWraps() {
+    var checkedWithVariants = ITEM_CATALOG.filter(function(it) {
+      return bundleItemChecked[it.id] && it.variantOptions && it.variantOptions.length >= 2
+    })
+    document.getElementById('bundleVariantWrap').innerHTML = checkedWithVariants.map(function(it) {
+      var chosen = bundleVariantChoice[it.id]
+      var radios = it.variantOptions.map(function(opt, idx) {
+        return '<label class="flex items-center gap-1.5 cursor-pointer">'
+          + '<input type="radio" name="bundleVariant_' + it.id + '" value="' + idx + '" class="accent-violet-600" '
+          + (chosen === String(idx) ? 'checked' : '')
+          + ' onchange="onVariantChoiceChange(&#39;' + it.id + '&#39;, this.value)">'
+          + escapeHtml(opt.label)
+          + '</label>'
+      }).join('')
+      return '<div class="px-4 py-3 bg-violet-50 border-t border-violet-100 flex-shrink-0">'
+        + '<div class="text-xs font-bold text-violet-700 mb-2">' + escapeHtml(it.label) + ' — 옵션 선택</div>'
+        + '<div class="flex gap-4 text-sm text-slate-700">' + radios + '</div>'
+        + '</div>'
+    }).join('')
+    // 체크 해제된 항목의 선택값은 지운다(다시 체크하면 처음부터 고르도록).
+    Object.keys(bundleVariantChoice).forEach(function(id) {
+      if (!checkedWithVariants.some(function(it) { return it.id === id })) delete bundleVariantChoice[id]
+    })
+  }
+
+  function onVariantChoiceChange(itemId, value) {
+    bundleVariantChoice[itemId] = value
+  }
+
   function onBundleItemChange(id, checked) {
     bundleItemChecked[id] = checked
     renderBundleItemList()
     updateStampSectionVisibility()
     updateCorpRegistrySectionVisibility()
+    renderVariantWraps()
   }
 
   function onStampChange(value) {
@@ -2685,6 +2730,15 @@ app.get('/ppt-generate', (c) => {
     var corpNeeded = order.some(function(o) { return o.catalog.corpRegistry })
     if (corpNeeded && bundleCorpRegistryIncludeCancelled === null) { alert('법인등기부등본의 말소사항 포함 여부를 선택해주세요.'); return }
 
+    // "+"로 등록한 항목 중 옵션(variant_options)이 있는 것들은 전부 선택돼 있어야 한다
+    // (2026-09-10 사용자 확인 — 법인등기부등본류 특수 필터의 일반화).
+    var variantItemsNeeded = order.filter(function(o) { return o.catalog.variantOptions && o.catalog.variantOptions.length >= 2 })
+    var variantMissing = variantItemsNeeded.filter(function(o) { return bundleVariantChoice[o.catalog.id] === undefined })
+    if (variantMissing.length) {
+      alert('다음 항목의 옵션을 선택해주세요:\\n' + variantMissing.map(function(o) { return o.catalog.label }).join('\\n'))
+      return
+    }
+
     var btn = document.getElementById('bundleConfirmBtn')
     btn.disabled = true
     btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>생성 중...'
@@ -2696,6 +2750,7 @@ app.get('/ppt-generate', (c) => {
       fd.append('order', JSON.stringify(order.map(function(o) { return o.key })))
       if (stampNeeded) fd.append('stampType', bundleStampType)
       if (corpNeeded) fd.append('corpRegistryIncludeCancelled', bundleCorpRegistryIncludeCancelled)
+      variantItemsNeeded.forEach(function(o) { fd.append('variant_' + o.key, bundleVariantChoice[o.catalog.id]) })
 
       // 정렬 기준 + 항목별 인력만큼/하나만 — 서버는 repeatMode를 sortBasis가 '인력별'일 때만
       // 사용한다(2026-09-10 사용자 확인). 드롭박스에 표시된(기본값 포함) 실제 값 그대로
@@ -3189,12 +3244,12 @@ app.get('/ppt-templates', async (c) => {
     <!-- 이미지 치환 첨부서류 추가/편집 모달 — 이름 + NAS 경로만 입력하면 된다
          (2026-09-10 사용자 확인 — "이 탭에서 + 누르고 이름과 경로만 입력하면 쓸 수 있도록"). -->
     <div id="imgSourceModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg">
         <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
           <h3 class="font-bold text-slate-800" id="imgSourceModalTitle">첨부서류 추가</h3>
           <button onclick="closeImageSourceModal()" class="text-slate-400 hover:text-slate-700"><i class="fas fa-times"></i></button>
         </div>
-        <div class="px-6 py-4 space-y-3">
+        <div class="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
           <input type="hidden" id="imgSourceId">
           <input type="hidden" id="imgSourceParentId">
           <div>
@@ -3205,6 +3260,20 @@ app.get('/ppt-templates', async (c) => {
             <label class="text-xs text-slate-500 font-medium mb-1 block">NAS 경로 <span class="text-red-500">*</span></label>
             <input id="imgSourcePath" type="text" placeholder="예: /activo/04.제안팀/99.악티보포털참조용/01.회사/OO" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-300">
             <p class="text-xs text-slate-400 mt-1">이 폴더 안의 최신 .pptx 또는 .pdf 파일 하나를 자동으로 가져와 씁니다.</p>
+          </div>
+          <!-- 선택 옵션 — 한 폴더 안에 파일명으로 구분되는 여러 종류가 있을 때(예: 법인등기부
+               등본의 "말소사항 포함/미포함")만 채운다. 2개 이상 등록하면 첨부PPT 생성
+               모달에서 이 항목에 라디오가 자동으로 생긴다(2026-09-10 사용자 확인 —
+               "특수 필터/조건... 저걸로 모든걸 해결 가능하게 만들어야해"). -->
+          <div class="pt-2 border-t border-slate-100">
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="text-xs text-slate-500 font-medium">선택 옵션 (선택 사항)</label>
+              <button type="button" onclick="addImgSourceVariantRow()" class="text-xs px-2 py-0.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 border border-slate-200 transition">
+                <i class="fas fa-plus mr-1"></i>옵션 추가
+              </button>
+            </div>
+            <p class="text-xs text-slate-400 mb-2">한 폴더에 파일명으로 구분되는 여러 종류가 있을 때만 등록하세요 — 없으면 그냥 최신 파일 하나를 씁니다.</p>
+            <div id="imgSourceVariantRows" class="space-y-1.5"></div>
           </div>
         </div>
         <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
@@ -3679,11 +3748,14 @@ app.get('/ppt-templates', async (c) => {
         </div>
         <div class="space-y-1.5">
           \${imageSources.length ? imageSources.map(function(s) {
+            var variantCount = 0
+            try { variantCount = s.variant_options ? JSON.parse(s.variant_options).length : 0 } catch (e) {}
             return \`
             <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 hover:border-teal-300 cursor-pointer transition"
                  onclick="openEditImageSource(\${s.id}, \${menu.id})">
               <i class="fas fa-image text-slate-400 text-xs flex-shrink-0"></i>
               <span class="text-xs font-medium text-slate-700 flex-shrink-0">\${s.menu_name}</span>
+              \${variantCount ? '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 flex-shrink-0">' + variantCount + '개 옵션</span>' : ''}
               <code class="text-[11px] text-slate-400 truncate ml-auto" title="\${s.nas_path || ''}">\${s.nas_path || '경로 미등록'}</code>
               <button onclick="event.stopPropagation(); deleteImageSource(\${s.id}, \${menu.id})" class="text-slate-300 hover:text-red-500 flex-shrink-0 px-1">
                 <i class="fas fa-times"></i>
@@ -4057,22 +4129,62 @@ app.get('/ppt-templates', async (c) => {
     document.getElementById('imgSourceParentId').value = parentId
     document.getElementById('imgSourceName').value = ''
     document.getElementById('imgSourcePath').value = ''
+    document.getElementById('imgSourceVariantRows').innerHTML = ''
     document.getElementById('imgSourceModal').classList.remove('hidden')
   }
 
   function openEditImageSource(id, parentId) {
     const parent = findMenuById(_treeData, parentId)
     const child = parent && parent.children ? parent.children.filter(function(c) { return c.id === id })[0] : null
-    if (!child) return
+    // 못 찾으면 조용히 아무 일도 안 하고 넘어가지 않는다 — 예전에 이 조용한 return 때문에
+    // 모달이 이전 상태(다른 항목의 값)로 남아있는 채 저장을 누르면 그 값으로 "새 항목"이
+    // 만들어지면서 원래 항목의 menu_code가 꼬인 적이 있었다(2026-09-11). 눈에 보이는
+    // 실패로 바꿔서 이런 조용한 데이터 손상을 막는다.
+    if (!child) { showAlert('이 항목을 찾을 수 없습니다 — 목록을 새로고침한 뒤 다시 시도해주세요', false); return }
     document.getElementById('imgSourceModalTitle').textContent = '첨부서류 편집'
     document.getElementById('imgSourceId').value = id
     document.getElementById('imgSourceParentId').value = parentId
     document.getElementById('imgSourceName').value = child.menu_name
     document.getElementById('imgSourcePath').value = child.nas_path || ''
+    document.getElementById('imgSourceVariantRows').innerHTML = ''
+    let variants = []
+    try { variants = child.variant_options ? JSON.parse(child.variant_options) : [] } catch (e) {}
+    variants.forEach(function(v) { addImgSourceVariantRow(v) })
     document.getElementById('imgSourceModal').classList.remove('hidden')
   }
 
   function closeImageSourceModal() { document.getElementById('imgSourceModal').classList.add('hidden') }
+
+  // 선택 옵션 한 줄(표시 이름 + 파일명에 포함/제외될 단어) — 법인등기부등본의 "말소사항
+  // 포함/미포함"을 일반화한 것(2026-09-10 사용자 확인). prefill이 있으면 편집 시 기존
+  // 값을 채운다.
+  function addImgSourceVariantRow(prefill) {
+    const container = document.getElementById('imgSourceVariantRows')
+    const div = document.createElement('div')
+    div.className = 'variant-row flex gap-1.5 items-center'
+    div.innerHTML = '<input type="text" placeholder="옵션 이름 (예: 말소사항포함)" class="variant-label flex-1 min-w-0 text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-300">'
+      + '<input type="text" placeholder="파일명에 포함될 단어" class="variant-includes w-32 text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-300">'
+      + '<input type="text" placeholder="파일명에 없어야 할 단어" class="variant-excludes w-32 text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-300">'
+      + '<button type="button" onclick="this.closest(&#39;.variant-row&#39;).remove()" class="text-slate-300 hover:text-red-400 text-sm px-1 flex-shrink-0"><i class="fas fa-times"></i></button>'
+    container.appendChild(div)
+    if (prefill) {
+      div.querySelector('.variant-label').value = prefill.label || ''
+      div.querySelector('.variant-includes').value = prefill.includes || ''
+      div.querySelector('.variant-excludes').value = prefill.excludes || ''
+    }
+  }
+
+  function collectImgSourceVariants() {
+    const rows = document.querySelectorAll('#imgSourceVariantRows .variant-row')
+    const result = []
+    rows.forEach(function(row) {
+      const label = row.querySelector('.variant-label').value.trim()
+      const includes = row.querySelector('.variant-includes').value.trim()
+      const excludes = row.querySelector('.variant-excludes').value.trim()
+      if (label) result.push({ label: label, includes: includes || undefined, excludes: excludes || undefined })
+    })
+    return result
+  }
 
   async function saveImageSource() {
     const id = document.getElementById('imgSourceId').value
@@ -4080,6 +4192,8 @@ app.get('/ppt-templates', async (c) => {
     const name = document.getElementById('imgSourceName').value.trim()
     const nasPath = document.getElementById('imgSourcePath').value.trim()
     if (!name || !nasPath) { showAlert('표시 이름과 NAS 경로를 모두 입력해주세요', false); return }
+    const variantOptions = collectImgSourceVariants()
+    if (variantOptions.length === 1) { showAlert('선택 옵션은 2개 이상이거나 아예 없어야 합니다', false); return }
 
     const body = {
       parent_id: parseInt(parentId),
@@ -4087,6 +4201,7 @@ app.get('/ppt-templates', async (c) => {
       nas_path: nasPath,
       category: 'attachment',
       build_kind: 'IMAGE_REPLACE',
+      variant_options: variantOptions,
     }
     if (!id) {
       // 새 항목 — menu_code는 관리자가 신경 쓸 필요 없이 자동 생성(고유하면 됨).

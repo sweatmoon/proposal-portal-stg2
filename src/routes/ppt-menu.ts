@@ -263,6 +263,14 @@ app.post('/migrate', async (c) => {
     // 직접 수정할 수 있는 경로(2026-09-10 사용자 확인 — "이름, 경로 수정이 가능해야 해").
     await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS nas_path TEXT`)
 
+    // 13. ppt_menus 에 variant_options 컬럼 추가 — 법인등기부등본의 "말소사항 포함/미포함"
+    // 같은 "같은 폴더 안에 파일명으로 구분되는 여러 종류" 케이스를 "+"로 추가한 항목도
+    // 지원하기 위한 범용 옵션 목록(JSON 배열: [{label, includes, excludes}]).
+    // includes/excludes는 파일명에 포함/제외돼야 하는 문자열 — 둘 다 없으면 옵션 선택 없이
+    // 그냥 최신 파일 하나를 쓴다(2026-09-10 사용자 확인 — "특수 필터/조건... 저걸로 모든걸
+    // 해결 가능하게 만들어야해").
+    await exec(`ALTER TABLE ppt_menus ADD COLUMN IF NOT EXISTS variant_options TEXT`)
+
     return c.json({ ok: true, message: 'PPT 테이블 마이그레이션 완료 (8개 테이블 + 컬럼 업그레이드)' })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -773,7 +781,7 @@ app.get('/', async (c) => {
     const menus = await query<{
       id: number; parent_id: number | null; menu_code: string; menu_name: string
       menu_number: string | null; sort_order: number; is_enabled: number; category: string
-      build_kind: string | null; nas_path: string | null
+      build_kind: string | null; nas_path: string | null; variant_options: string | null
     }>(
       cat
         ? `SELECT * FROM ppt_menus WHERE category=$1 ORDER BY sort_order ASC, id ASC`
@@ -968,14 +976,15 @@ app.post('/restore', async (c) => {
 app.post('/', async (c) => {
   try {
     const body = await c.req.json()
-    const { parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind, nas_path } = body
+    const { parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind, nas_path, variant_options } = body
     if (build_kind != null && !isAttachmentBuildKind(build_kind)) {
       return c.json({ ok: false, error: `알 수 없는 build_kind: ${build_kind}` }, 400)
     }
+    const variantOptionsJson = Array.isArray(variant_options) && variant_options.length ? JSON.stringify(variant_options) : null
     const row = await queryOne<{ id: number }>(`
-      INSERT INTO ppt_menus (parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind, nas_path)
-      VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7,'proposal'), $8, $9) RETURNING id
-    `, [parent_id ?? null, menu_code, menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, category ?? null, build_kind ?? null, nas_path ?? null])
+      INSERT INTO ppt_menus (parent_id, menu_code, menu_name, menu_number, sort_order, is_enabled, category, build_kind, nas_path, variant_options)
+      VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7,'proposal'), $8, $9, $10) RETURNING id
+    `, [parent_id ?? null, menu_code, menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, category ?? null, build_kind ?? null, nas_path ?? null, variantOptionsJson])
     return c.json({ ok: true, id: row?.id })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -991,17 +1000,30 @@ app.put('/:id', async (c) => {
   try {
     const id = Number(c.req.param('id'))
     const body = await c.req.json()
-    const { menu_name, menu_number, sort_order, is_enabled, parent_id, build_kind, nas_path } = body
+    const { menu_name, menu_number, sort_order, is_enabled, parent_id, build_kind, nas_path, variant_options } = body
     if (build_kind !== undefined && build_kind !== null && !isAttachmentBuildKind(build_kind)) {
       return c.json({ ok: false, error: `알 수 없는 build_kind: ${build_kind}` }, 400)
     }
-    await exec(`
-      UPDATE ppt_menus
-      SET menu_name=$1, menu_number=$2, sort_order=$3, is_enabled=$4, parent_id=$5,
-          build_kind=COALESCE($6, build_kind), nas_path=COALESCE($8, nas_path),
-          updated_at=NOW()
-      WHERE id=$7
-    `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, build_kind ?? null, id, nas_path || null])
+    // variant_options는 "안 보냄"(다른 모달에서 이름/분류만 바꿀 때)과 "빈 배열로 보냄"
+    // (관리자가 옵션을 전부 지웠을 때)을 구분해야 해서 COALESCE 대신 직접 분기한다.
+    if (variant_options !== undefined) {
+      const variantOptionsJson = Array.isArray(variant_options) && variant_options.length ? JSON.stringify(variant_options) : null
+      await exec(`
+        UPDATE ppt_menus
+        SET menu_name=$1, menu_number=$2, sort_order=$3, is_enabled=$4, parent_id=$5,
+            build_kind=COALESCE($6, build_kind), nas_path=COALESCE($8, nas_path),
+            variant_options=$9, updated_at=NOW()
+        WHERE id=$7
+      `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, build_kind ?? null, id, nas_path || null, variantOptionsJson])
+    } else {
+      await exec(`
+        UPDATE ppt_menus
+        SET menu_name=$1, menu_number=$2, sort_order=$3, is_enabled=$4, parent_id=$5,
+            build_kind=COALESCE($6, build_kind), nas_path=COALESCE($8, nas_path),
+            updated_at=NOW()
+        WHERE id=$7
+      `, [menu_name, menu_number ?? null, sort_order ?? 0, is_enabled ?? 1, parent_id ?? null, build_kind ?? null, id, nas_path || null])
+    }
     return c.json({ ok: true })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

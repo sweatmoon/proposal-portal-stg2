@@ -139,9 +139,15 @@ async function resolveImageReplaceOverride(menuCode: string): Promise<{ label?: 
  * 밑이면 도장 없이 이미지만 끼워넣는다(자세한 조립은 generic-image-replace-doc.ts 참고).
  * 못 찾거나 조건에 안 맞으면 undefined(호출 쪽에서 "알 수 없는 첨부 항목" 처리).
  */
+interface VariantOption {
+  label: string
+  includes?: string
+  excludes?: string
+}
+
 async function resolveDynamicAttachmentType(menuCode: string): Promise<AttachmentTypeDef | undefined> {
-  const row = await queryOne<{ menu_name: string; nas_path: string | null; build_kind: string | null; parent_id: number | null }>(
-    `SELECT menu_name, nas_path, build_kind, parent_id FROM ppt_menus WHERE menu_code = $1 AND category = 'attachment'`,
+  const row = await queryOne<{ menu_name: string; nas_path: string | null; build_kind: string | null; parent_id: number | null; variant_options: string | null }>(
+    `SELECT menu_name, nas_path, build_kind, parent_id, variant_options FROM ppt_menus WHERE menu_code = $1 AND category = 'attachment'`,
     [menuCode]
   )
   if (!row || row.build_kind !== 'IMAGE_REPLACE' || !row.parent_id || !row.nas_path) return undefined
@@ -150,12 +156,29 @@ async function resolveDynamicAttachmentType(menuCode: string): Promise<Attachmen
   const needsStamp = parent.menu_code === 'ATT_STAMP_YES'
   const label = row.menu_name
   const nasPath = row.nas_path
+  let variantOptions: VariantOption[] = []
+  try {
+    variantOptions = row.variant_options ? JSON.parse(row.variant_options) : []
+  } catch { /* 무시 — 파싱 실패 시 옵션 없음 취급 */ }
   return {
     label,
     buildKind: 'IMAGE_REPLACE',
     build: async (buf, projectId, form, titlePrefix) => {
       const stampType = needsStamp ? validateStampType(form) : null
-      const { zip } = await buildGenericImageReplaceZip(buf, projectId, label, nasPath, stampType, titlePrefix)
+      // variant_options(예: 법인등기부등본류의 "말소사항 포함/미포함")가 있으면 사용자가
+      // 첨부PPT 생성 모달에서 고른 인덱스를 "variant_<menuCode>" 필드로 받아, 그 옵션의
+      // includes/excludes로 파일명 필터를 만든다(2026-09-10 사용자 확인 — "특수 필터/
+      // 조건... 저걸로 모든걸 해결 가능하게 만들어야해").
+      let filenamePredicate: ((name: string) => boolean) | undefined
+      if (variantOptions.length) {
+        const chosenRaw = form.get(`variant_${menuCode}`)
+        const chosenIdx = typeof chosenRaw === 'string' ? Number(chosenRaw) : NaN
+        const chosen = variantOptions[chosenIdx]
+        if (!chosen) throw new Error(`"${label}"의 옵션(${variantOptions.map(o => o.label).join('/')})을 선택해주세요`)
+        filenamePredicate = (name: string) =>
+          (!chosen.includes || name.includes(chosen.includes)) && (!chosen.excludes || !name.includes(chosen.excludes))
+      }
+      const { zip } = await buildGenericImageReplaceZip(buf, projectId, label, nasPath, stampType, titlePrefix, filenamePredicate)
       return zip
     },
   }
